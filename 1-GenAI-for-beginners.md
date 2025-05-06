@@ -1,3 +1,5 @@
+# Generative AI
+
 <!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
 
 - [Generative AI](#generative-ai)
@@ -22,8 +24,6 @@
    * [Chatbot code example](#chatbot-code-example)
 
 <!-- TOC end -->
-
-\# Generative AI
 
 [Generative AI for beginners Udemy course](https://www.udemy.com/course/generative-ai-for-beginners-b/?srsltid=AfmBOor5eMWBtKCoD5S6PY7MeatyG_l9ho9b7YyESOYpPD2q8sxmidEv&couponCode=LEARNNOWPLANS)
 
