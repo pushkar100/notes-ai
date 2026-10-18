@@ -28,6 +28,8 @@
 - [Multi-Model LLM Conversations: Orchestrating Adversarial Dialogue and Multi-Party Architectures](#multi-model-llm-conversations-orchestrating-adversarial-dialogue-and-multi-party-architectures)
 - [Building Data Science UIs with Gradio](#building-data-science-uis-with-gradio)
 - [Building Your First Gradio Interface with Callbacks and Sharing](#building-your-first-gradio-interface-with-callbacks-and-sharing)
+- [Gradio Interfaces: Authentication, Custom Styling, and Model Integration](#gradio-interfaces-authentication-custom-styling-and-model-integration)
+- [Markdown Responses and Real-Time Streaming with Gradio and OpenAI](#markdown-responses-and-real-time-streaming-with-gradio-and-openai)
 
 ---
 
@@ -8384,5 +8386,613 @@ While reverse tunneling is convenient for solo hackathons and data science exper
 <summary><b>Question 5: Why do corporate security teams and enterprise firewalls frequently block or flag `share=True`?</b></summary>
 <br>
 <b>Answer:</b> <code>share=True</code> uses reverse tunneling technology (similar to Ngrok), which creates an outbound tunnel that allows external public internet traffic into a local computer behind internal NAT/firewall defenses. Corporate IT and security teams treat unauthorized reverse tunnels as security risks for data exfiltration and external intrusion.
+</details>
+
+---
+
+# Gradio Interfaces: Authentication, Custom Styling, and Model Integration
+
+## Developer Productivity and Immediate Browser Launching
+
+During interactive development, manually copying port URLs from terminal logs into a web browser adds unnecessary friction. Gradio provides a dedicated convenience flag in `.launch()` to automate this workflow:
+
+```python
+# Launch the ASGI server and immediately open the default system browser
+demo.launch(inbrowser=True)
+```
+
+Setting `inbrowser=True` instructs the underlying Python process to issue an operating system call that opens a new browser tab pointed to the dynamically allocated local port immediately after server binding succeeds.
+
+---
+
+## Securing Interfaces with Built-in Authentication
+
+When exposing an interactive application—especially when utilizing public sharing tunnels via `share=True`—unrestricted access allows anyone with the URL to consume API credits or execute code on your local system. Gradio provides a built-in authentication mechanism directly in `.launch()` that renders a credential challenge modal before serving the user interface.
+
+### Single and Multi-User Authentication
+
+The `auth` parameter accepts either a single `(username, password)` tuple or a list of user credential tuples:
+
+```python
+import os
+from dotenv import load_dotenv
+import gradio as gr
+
+load_dotenv(override=True)
+
+def shout(text: str) -> str:
+    print(f"Shout has been called with input: {text}")
+    return text.upper()
+
+demo = gr.Interface(
+    fn=shout,
+    inputs="textbox",
+    outputs="textbox",
+    flagging_mode="never"
+)
+
+# Example 1: Single user credential pair
+# demo.launch(auth=("admin", "secret_passphrase"))
+
+# Example 2: Multi-user credential list with environment variables
+admin_user = os.getenv("APP_ADMIN_USER", "admin")
+admin_pass = os.getenv("APP_ADMIN_PASS", "change_me_in_env")
+
+demo.launch(
+    auth=[
+        (admin_user, admin_pass),
+        ("researcher", "lab_access_2026")
+    ]
+)
+```
+
+### Expected Output Sample
+
+```text
+* Running on local URL:  http://127.0.0.1:7860
+* Authentication required to access the interface.
+```
+
+When navigating to the application URL, the browser displays a standard login screen with username and password input fields. Submitting invalid credentials prompts an `"Invalid credentials"` notification and denies access to the underlying React application.
+
+### Security Best Practices and Production Traps
+
+While passing plain-text tuples into `auth` is suitable for quick internal demonstrations, it introduces severe security liabilities if deployed in production environments.
+
+```text
+AUTHENTICATION SECURITY ARCHITECTURE:
+
+[ Quick Demo / Prototyping ]
+Hardcoded Tuples in Source Code:
+auth=[("admin", "plain_text")]  ---> HIGH RISK (Source code leak exposes credentials)
+
+[ Intermediate Staging ]
+Environment Variables via .env:
+auth=[(os.getenv("USER"), os.getenv("PASS"))] ---> BETTER (Separates secrets from code)
+
+[ Enterprise / Production ]
+Reverse Proxy / OAuth Gateway:
+User Browser ---> HTTPS Reverse Proxy (Nginx/Cloudflare Zero Trust) ---> Gradio App
+                      |
+                      v
+             OAuth2 / SSO / Hash Verification
+```
+
+> [!CAUTION]
+> **Plain-Text Password Hazard:**
+> Never commit plain-text passwords or secret credentials directly into Python scripts or git repositories. At a minimum, store credentials in `.env` files that are excluded via `.gitignore`. For production applications, delegate authentication to an enterprise identity provider or reverse proxy using OAuth2, OpenID Connect, or HTTP Basic Authentication with salted cryptographic hashes (e.g., bcrypt or argon2).
+
+---
+
+## Interface Themes and Accessibility Considerations
+
+Gradio applications automatically adapt their visual appearance to match the user's operating system and browser preferences via standard CSS media queries (`prefers-color-scheme: dark` or `prefers-color-scheme: light`).
+
+While it is technically possible to force dark mode or light mode through custom JavaScript injection, Gradio's design guidelines strongly advise against overriding user defaults.
+
+### Accessibility Trade-offs: Enforced Themes vs. System Preference
+
+| Design Approach | Technical Mechanism | User Experience Impact | Accessibility Compliance |
+| :--- | :--- | :--- | :--- |
+| **System Adaptive (Default)** | CSS `prefers-color-scheme` media queries. | Matches the user's existing OS and browser theme automatically. | **Fully compliant.** Respects visual accommodations configured by the user. |
+| **Forced Dark Mode** | Custom JS DOM manipulation (adding `.dark` class). | Consistent high-contrast dark aesthetic across all devices. | **Poor.** Can cause severe visual strain for users with astigmatism or light-sensitivity needs. |
+| **Forced Light Mode** | Custom JS DOM manipulation (removing `.dark` class). | Uniform bright presentation for specific brand requirements. | **Poor.** High glare in low-light environments for dark-mode users. |
+
+> [!IMPORTANT]
+> Accessibility standards (WCAG 2.1) require respecting the end-user's contrast and color preferences. Unless a specialized design requirement strictly dictates otherwise, permit Gradio to adapt dynamically to the user's environment.
+
+---
+
+## Explicit Component Definition and Custom Layouts
+
+In foundational prototypes, passing shorthand strings (`inputs="textbox"`, `outputs="textbox"`) suffices. However, production user interfaces require explicit control over labels, placeholder text, field heights, titles, and pre-populated examples.
+
+Gradio allows developers to instantiate UI components explicitly and pass them as structured objects to `gr.Interface`.
+
+```python
+import gradio as gr
+
+def shout(text: str) -> str:
+    """Callback function processing user text input."""
+    print(f"Shout has been called with input {text}")
+    return text.upper()
+
+# Explicitly configure input and output components
+message_input = gr.Textbox(
+    label="Your message:",
+    info="Enter a message to be shouted",
+    lines=7
+)
+
+message_output = gr.Textbox(
+    label="Response:",
+    lines=8
+)
+
+# Assemble interface with explicit metadata, examples, and layout controls
+view = gr.Interface(
+    fn=shout,
+    title="Shout",
+    inputs=message_input,
+    outputs=message_output,
+    examples=[
+        ["hello"],
+        ["howdy"]
+    ],
+    flagging_mode="never"  # Disables unnecessary CSV audit logs
+)
+
+if __name__ == "__main__":
+    view.launch()
+```
+
+### Expected Output Sample
+
+```text
+* Running on local URL:  http://127.0.0.1:7861
+
+Shout has been called with input hello
+Shout has been called with input howdy
+```
+
+### Key Parameters Explained
+
+- **`label`**: Sets the visual header text displayed directly above the text box.
+- **`info`**: Subtext displayed in lighter typography providing contextual instructions to the user.
+- **`lines`**: Controls the initial vertical height of the text area in rows, preventing content overflow for multi-line inputs.
+- **`examples`**: A nested list of pre-configured sample inputs rendered as clickable pills or table rows below the form. Clicking an example automatically populates the input field.
+- **`title`**: Sets the primary `<h1>` heading displayed at the top of the generated React page.
+
+> [!TIP]
+> **Notebook Mouse Wheel Scrolling Gotcha:**
+> When interacting with an embedded Gradio interface inside a Jupyter Notebook or IDE editor, attempting to scroll with the mouse wheel while hovering over a multi-line `gr.Textbox` scrolls the inner text area rather than the notebook page. To scroll the notebook page, move the mouse cursor outside the Gradio iframe into the editor margin.
+
+---
+
+## Integrating Frontier LLMs into Gradio Callbacks
+
+A common misconception among developers new to Gradio is assuming that the framework contains specialized deep-learning primitives or proprietary LLM connectors. In reality, **Gradio has zero awareness of large language models**.
+
+To Gradio, any Python callable that accepts input arguments and returns an output value is an identical callback. Swapping a local string manipulation function for a frontier model API call requires zero architectural restructuring of the UI.
+
+```mermaid
+flowchart LR
+    subgraph Browser["User Browser (React Client)"]
+        UI_In["Input Component<br/>(gr.Textbox)"]
+        UI_Btn["Submit Button"]
+        UI_Out["Output Component<br/>(gr.Textbox / Markdown)"]
+    end
+
+    subgraph Server["Gradio ASGI Server (Python)"]
+        Dispatcher["Event Dispatcher"]
+    end
+
+    subgraph Callbacks["Interchangeable Callbacks"]
+        direction TB
+        Fn_Shout["shout(text)<br/>(Local Python Logic)"]
+        Fn_GPT["message_gpt(prompt)<br/>(OpenAI API Call)"]
+        Fn_Claude["message_claude(prompt)<br/>(Anthropic API Call)"]
+    end
+
+    UI_Btn -->|Click Event| Dispatcher
+    UI_In -.->|Serialized Payload| Dispatcher
+    Dispatcher -->|Executes Callback| Fn_GPT
+    Fn_GPT -->|Returns Response String| Dispatcher
+    Dispatcher -->|Serialized JSON| UI_Out
+
+    style Fn_GPT fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    style Dispatcher fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+```
+
+### Reconstructed Code: Plugging GPT-4o-mini into the UI
+
+```python
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+import gradio as gr
+
+load_dotenv(override=True)
+openai = OpenAI()
+
+system_message = "You are a helpful assistant"
+
+def message_gpt(prompt: str) -> str:
+    """Dispatches user prompt to OpenAI Chat Completions API."""
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": prompt}
+    ]
+    response = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages
+    )
+    return response.choices[0].message.content
+
+# Configure explicit UI components
+message_input = gr.Textbox(
+    label="Your message:",
+    info="Enter a message for GPT-4o-mini",
+    lines=7
+)
+
+message_output = gr.Textbox(
+    label="Response:",
+    lines=8
+)
+
+# Connect message_gpt callback directly to Gradio interface
+view = gr.Interface(
+    fn=message_gpt,
+    title="GPT",
+    inputs=message_input,
+    outputs=message_output,
+    examples=[
+        ["Explain the Transformer architecture in simple terms"],
+        ["Write a Python function to reverse a string"]
+    ],
+    flagging_mode="never"
+)
+
+if __name__ == "__main__":
+    view.launch()
+```
+
+### Expected Output Sample
+
+```text
+* Running on local URL:  http://127.0.0.1:7862
+```
+
+When an end-user enters a prompt and clicks "Submit":
+1. The React frontend posts the prompt to Gradio's internal FastAPI endpoint.
+2. FastAPI executes `message_gpt(prompt)` in the Python runtime.
+3. `message_gpt` calls the cloud LLM endpoint and waits for completion.
+4. The generated string returns to FastAPI, which serializes the result back to the browser's output textbox.
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: What is the operational effect of passing `inbrowser=True` to the `.launch()` method?</b></summary>
+<br>
+<b>Answer:</b> It automatically instructs the operating system to open a new tab or window in the default web browser pointed directly at the newly allocated local server address (e.g., <code>http://127.0.0.1:7860</code>) as soon as the server binds to the port.
+</details>
+
+<details>
+<summary><b>Question 2: How can multiple authorized users be configured using Gradio's built-in `auth` parameter?</b></summary>
+<br>
+<b>Answer:</b> By passing a list of <code>(username, password)</code> tuples into the <code>auth</code> parameter of <code>.launch()</code> (for example: <code>auth=[("user1", "pass1"), ("user2", "pass2")]</code>). Gradio renders an authentication challenge screen that validates incoming credentials against all provided pairs.
+</details>
+
+<details>
+<summary><b>Question 3: Why does Gradio advise against hardcoding dark mode or light mode via custom JavaScript?</b></summary>
+<br>
+<b>Answer:</b> Gradio by default respects the user's operating system and browser preferences via CSS <code>prefers-color-scheme</code>. Overriding this behavior violates accessibility guidelines (WCAG) because users with specific vision impairments, light sensitivities, or astigmatism rely on their system-level settings for readable contrast.
+</details>
+
+<details>
+<summary><b>Question 4: What is the primary difference between configuring inputs as `inputs="textbox"` versus `inputs=gr.Textbox(...)`?</b></summary>
+<br>
+<b>Answer:</b> Passing the string alias <code>"textbox"</code> uses default settings with no custom labels or line constraints. Explicitly instantiating <code>gr.Textbox(...)</code> allows developers to define fine-grained layout properties such as <code>label</code>, contextual <code>info</code> hints, placeholder text, and initial vertical height via <code>lines</code>.
+</details>
+
+<details>
+<summary><b>Question 5: How does Gradio's architecture treat an LLM inference function differently from a basic string manipulation function?</b></summary>
+<br>
+<b>Answer:</b> It does not treat them differently at all. Gradio is model-agnostic; it simply treats any function provided to <code>fn</code> as a generic Python callback. Whether the function reverses a string locally or calls an external cloud LLM API, Gradio passes the serialized input to the function and renders the returned string into the configured output component.
+</details>
+
+---
+
+# Markdown Responses and Real-Time Streaming with Gradio and OpenAI
+
+## Rich Text Formatting: Rendering Markdown in Gradio
+
+Standard textboxes (`gr.Textbox`) display raw, unformatted text strings. When interfacing with frontier models, responses frequently contain structural hierarchy, such as code snippets, bullet lists, bold emphasis, and tables. 
+
+To present formatted text, replace `gr.Textbox` with `gr.Markdown`.
+
+```python
+# Transitioning output component from plaintext textbox to rich markdown container
+message_output = gr.Markdown(label="Response:")
+```
+
+### System Prompt Engineering for Clean Markdown
+
+When prompting an LLM to reply in Markdown intended for web display, models frequently enclose the entire response inside a Markdown code fence (e.g., ```` ```markdown ... ``` ````). When rendered inside a Markdown parser, this causes the entire response to display as a monospaced code snippet rather than rendered visual typography.
+
+To resolve this, specify the formatting constraint directly in the system instructions:
+
+```python
+system_message = "You are a helpful assistant that responds in markdown without codeblocks"
+```
+
+The addition of `"without codeblocks"` instructs the model to generate native Markdown headers (`#`, `##`), bullet points (`-`), and bold text (`**`) while suppressing outer enclosing code fences.
+
+---
+
+## Global Variables in Notebooks vs. Production Software Engineering
+
+A fundamental point of discussion in AI engineering centers on the use of mutable global variables (such as updating `system_message` in a notebook cell without modifying function definitions).
+
+In a live Python interpreter or Jupyter kernel:
+1. `system_message` is declared in the global module namespace.
+2. When `message_gpt(prompt)` executes, Python resolves `system_message` dynamically from the enclosing global scope at call time.
+3. Modifying `system_message` in a separate notebook cell instantly alters subsequent LLM calls without requiring `message_gpt` to be re-declared.
+
+```text
+PYTHON NAMESPACE EXECUTION MODEL:
+
+[ Global Scope (Kernel / Module) ]
++---------------------------------------------------------------+
+| system_message = "You are a helpful assistant..."             |
+| openai = OpenAI()                                             |
++---------------------------------------------------------------+
+                               ^
+                               | Dynamic Lookup at Execution Time
+[ Local Function Scope ]       |
++------------------------------+--------------------------------+
+| def message_gpt(prompt):                                      |
+|     messages = [                                              |
+|         {"role": "system", "content": system_message},        |
+|         {"role": "user", "content": prompt}                   |
+|     ]                                                         |
++---------------------------------------------------------------+
+```
+
+### Engineering Comparison: Exploratory Notebooks vs. Production Packages
+
+| Dimension | Exploratory Notebook Pattern | Production Software Pattern |
+| :--- | :--- | :--- |
+| **State Paradigm** | Mutable global state. | Immutable or explicitly passed parameters. |
+| **Function Signatures** | `def call_llm(prompt)` (reads globals). | `def call_llm(prompt, system_message, model)` |
+| **Developer Mindset** | **Data Scientist / Researcher:** Rapid hypothesis testing, interactive iteration, parameter sweeping. | **Software Engineer:** Deterministic behavior, thread safety, unit testability, clean dependency injection. |
+| **Debugging Complexity** | Hidden state mutations can lead to out-of-order execution bugs across cells. | Clear tracing; functions are pure and self-contained. |
+| **Recommendation** | **Encouraged in exploratory Jupyter labs** when the engineer understands the kernel lifecycle. | **Strictly prohibited in production codebases, microservices, and backend APIs.** |
+
+> [!TIP]
+> In an exploratory Jupyter notebook, altering global variables to observe changes in UI behavior is standard, productive engineering practice. However, when refactoring notebook code into production modules, always convert global variables into explicit function arguments or configuration classes.
+
+---
+
+## Technical Prompts: Exploring the Transformer Architecture
+
+To evaluate the enhanced Markdown interface, the instructor uses two comparative prompts that demonstrate how LLMs adjust explanation depth based on target audience personas:
+
+1. **Layperson Prompt:**
+   - *"Explain the Transformer architecture to a layperson."*
+   - **Core Mental Model:** Contrasts traditional sequential models (LSTMs/RNNs reading a book word-by-word) against the Transformer (a smart reader scanning an entire page at once). Introduces **Self-Attention** intuitively as the mechanism that determines which words relate to each other regardless of sentence distance.
+2. **Aspiring AI Engineer Prompt:**
+   - *"Explain the Transformer architecture to an aspiring AI engineer."*
+   - **Technical Components Introduced:**
+     - Foundational paper: *Attention Is All You Need* (Vaswani et al., 2017).
+     - **Input Embeddings & Positional Encodings:** Mapping discrete tokens into dense vector spaces and injecting positional signals so the model understands sequence order during parallel processing.
+     - **Encoder-Decoder Stacks:** Historical dual-stack architecture versus modern decoder-only architectures (e.g., GPT series).
+     - **Multi-Head Self-Attention:** Parallel projection into Queries ($Q$), Keys ($K$), and Values ($V$) to capture diverse linguistic and contextual relationships.
+     - **Feed-Forward Networks & Residual Connections:** Layer normalization and skip connections ensuring stable gradient flow across deep neural networks.
+
+---
+
+## Real-Time Token Streaming with Python Generators
+
+When querying LLMs via standard request-response calls, the application remains blocked while the model generates the entire response. For comprehensive explanations, this introduces several seconds of perceived latency.
+
+To deliver an immediate, responsive user experience, applications stream tokens incrementally as the model generates them.
+
+### How Gradio Implements Streaming via `yield`
+
+In Python, a function containing the `yield` keyword is a **Generator**. Instead of executing to completion and returning a single value, a generator produces a sequence of values over time, pausing execution between iterations.
+
+Gradio's engine detects when a registered callback function is a generator:
+1. When the user submits an input, Gradio iterates over the generator.
+2. Each time the generator yields a value, Gradio immediately serializes the current payload, dispatches a Server-Sent Event (SSE) or WebSocket frame to the browser, and refreshes the UI component in real time.
+
+```text
+STREAMING EXECUTION TIMELINE:
+
+Standard Return (High Latency):
+Client Request ===> [ Model Generation: 6 seconds ] ===> Full Response Received
+(User observes frozen screen for 6 seconds)
+
+Generator Yield (Real-Time Streaming):
+Client Request ===> Model Chunk 1 ===> yield "The"     ===> UI displays "The"
+               ===> Model Chunk 2 ===> yield "The Trans" ===> UI displays "The Trans"
+               ===> Model Chunk 3 ===> yield "The Transformer..." ===> UI updates
+(User observes immediate visual feedback within 200 milliseconds)
+```
+
+### The Cumulative Accumulation Pattern
+
+A vital implementation detail in Gradio is that the framework expects the generator to yield the **complete accumulated text up to that moment**, rather than individual token deltas.
+
+```python
+import os
+from dotenv import load_dotenv
+from openai import OpenAI
+import gradio as gr
+
+load_dotenv(override=True)
+openai = OpenAI()
+
+system_message = "You are a helpful assistant that responds in markdown without codeblocks"
+
+def stream_gpt(prompt: str):
+    """
+    Generator callback that streams OpenAI completions to Gradio.
+    Accumulates token chunks and yields the full cumulative response on each iteration.
+    """
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": prompt}
+    ]
+    
+    # Enable streaming on the completions endpoint
+    stream = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=True  # Instructs API to return a chunk iterator
+    )
+    
+    result = ""
+    for chunk in stream:
+        # Extract delta text; handle potential None values safely
+        delta_text = chunk.choices[0].delta.content or ""
+        result += delta_text
+        yield result  # Yield full accumulated string to refresh Gradio Markdown
+
+# Configure UI with Markdown output container
+message_input = gr.Textbox(
+    label="Your message:",
+    info="Enter a message for GPT-4o-mini",
+    lines=7
+)
+message_output = gr.Markdown(label="Response:")
+
+view = gr.Interface(
+    fn=stream_gpt,
+    title="GPT Streaming Assistant",
+    inputs=message_input,
+    outputs=message_output,
+    examples=[
+        ["Explain the Transformer architecture to a layperson"],
+        ["Explain the Transformer architecture to an aspiring AI engineer"]
+    ],
+    flagging_mode="never"
+)
+
+if __name__ == "__main__":
+    view.launch()
+```
+
+### Expected Output Sample
+
+```text
+* Running on local URL:  http://127.0.0.1:7873
+```
+
+When clicking an example, the Markdown component immediately renders the opening tokens and continuously streams the markdown formatting (headers, bolding, lists) in real time without lag.
+
+---
+
+## Multi-Provider Portability: Streaming with Anthropic Claude
+
+Because modern architectures favor vendor flexibility over proprietary lock-in, replacing OpenAI with an alternative frontier provider (e.g., Anthropic Claude) requires changing only the client invocation.
+
+By leveraging Anthropic's OpenAI-compatible endpoint or standard client structure, streaming operates identically:
+
+```python
+import os
+from openai import OpenAI
+import gradio as gr
+
+# Configure Anthropic via OpenAI-compatible gateway
+anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+anthropic_url = "https://api.anthropic.com/v1/"
+
+anthropic = OpenAI(
+    api_key=anthropic_api_key,
+    base_url=anthropic_url
+)
+
+def stream_claude(prompt: str):
+    """Streaming callback targeting Claude 3.5 Sonnet."""
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": prompt}
+    ]
+    
+    stream = anthropic.chat.completions.create(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        stream=True
+    )
+    
+    result = ""
+    for chunk in stream:
+        delta_text = chunk.choices[0].delta.content or ""
+        result += delta_text
+        yield result
+
+# Gradio interface remains structurally identical
+claude_view = gr.Interface(
+    fn=stream_claude,
+    title="Claude Streaming Assistant",
+    inputs=message_input,
+    outputs=message_output,
+    examples=[
+        ["Explain the Transformer architecture to a layperson"],
+        ["Explain the Transformer architecture to an aspiring AI engineer"]
+    ],
+    flagging_mode="never"
+)
+
+if __name__ == "__main__":
+    claude_view.launch()
+```
+
+### Architectural Comparison: Streaming vs. Non-Streaming Endpoints
+
+| Characteristic | Standard Non-Streaming (`stream=False`) | Token Streaming (`stream=True` + Generator) |
+| :--- | :--- | :--- |
+| **Time to First Token (TTFT)** | Identical to Total Latency (user waits for entire completion). | **Minimal (~150-300ms).** First token renders immediately. |
+| **Python Return Type** | Returns `str` once. | Yields `str` iteratively as a `Generator`. |
+| **Network Protocol** | Standard HTTP POST request/response. | HTTP Server-Sent Events (SSE) / persistent connection. |
+| **UI Component Requirement** | Compatible with `gr.Textbox` or `gr.Markdown`. | Compatible with `gr.Textbox` or `gr.Markdown` (refreshes on each `yield`). |
+| **Best Used When** | Programmatic backend pipelines, batch data extraction, structured JSON parsing. | **Interactive chat interfaces, user-facing search, and real-time assistants.** |
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: Why should prompt engineers include "without codeblocks" when directing an LLM to respond in Markdown for a Gradio app?</b></summary>
+<br>
+<b>Answer:</b> Without this explicit negative constraint, frontier LLMs often wrap their entire Markdown output inside a top-level code block (<code>```markdown ... ```</code>). In a Gradio <code>gr.Markdown</code> component, this renders the response as an unformatted monospaced code snippet rather than rich visual HTML elements (headings, bold text, lists).
+</details>
+
+<details>
+<summary><b>Question 2: How does Python resolve a variable like `system_message` inside a function if it was not passed as a parameter?</b></summary>
+<br>
+<b>Answer:</b> Python uses dynamic scope resolution (LEGB rule: Local, Enclosing, Global, Built-in). If a variable is not found in the local function scope, Python looks up its value in the enclosing module/global scope at the time the function is executed.
+</details>
+
+<details>
+<summary><b>Question 3: How does Gradio's UI engine recognize that a callback function supports real-time streaming?</b></summary>
+<br>
+<b>Answer:</b> Gradio inspects the callback function object. If the function contains the <code>yield</code> keyword, Python treats it as a <b>generator</b>. Gradio automatically iterates through the generator, pushing each yielded string to the client interface via WebSockets or Server-Sent Events.
+</details>
+
+<details>
+<summary><b>Question 4: What is the required accumulation pattern when streaming tokens to a Gradio `gr.Markdown` component?</b></summary>
+<br>
+<b>Answer:</b> Gradio requires the generator to yield the <b>full accumulated string so far</b> (e.g., <code>result += chunk; yield result</code>) on each step, rather than yielding isolated token deltas. Yielding only the latest delta would cause the UI component to overwrite its content and display only the most recent token.
+</details>
+
+<details>
+<summary><b>Question 5: What is the primary difference in Time to First Token (TTFT) between standard API completions and streaming completions?</b></summary>
+<br>
+<b>Answer:</b> In standard completions, Time to First Token is equal to the total generation time because the user receives no data until the entire text is generated. In streaming completions, TTFT is decoupled from total completion length, allowing the user to begin reading the initial tokens within a few hundred milliseconds while the remainder of the output generates in the background.
 </details>
 
