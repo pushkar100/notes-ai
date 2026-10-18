@@ -18,6 +18,12 @@
 - [What Are Tokens: From Characters to GPT's Subword Tokenizer](#what-are-tokens-from-characters-to-gpts-subword-tokenizer)
 - [Tokenizing with tiktoken and Understanding the Illusion of Memory](#tokenizing-with-tiktoken-and-understanding-the-illusion-of-memory)
 - [Context Windows, API Costs, and Token Limits in LLMs](#context-windows-api-costs-and-token-limits-in-llms)
+- [Building a Sales Brochure Generator: Architecture and Web Scraping Foundations](#building-a-sales-brochure-generator-architecture-and-web-scraping-foundations)
+- [Extracting Structured Links with JSON Prompts and the Chat Completions API](#extracting-structured-links-with-json-prompts-and-the-chat-completions-api)
+- [Chaining LLM Calls: Multi-Page Web Crawling and Context Aggregation](#chaining-llm-calls-multi-page-web-crawling-and-context-aggregation)
+- [Generating Company Brochures with Streaming Output and Markdown UI](#generating-company-brochures-with-streaming-output-and-markdown-ui)
+- [Connecting to Multiple Frontier Models: OpenAI, Anthropic, Gemini, Groq, and OpenRouter](#connecting-to-multiple-frontier-models-openai-anthropic-gemini-groq-and-openrouter)
+- [Testing Reasoning Models: Inference-Time Scaling and Spatial Logic Puzzles](#testing-reasoning-models-inference-time-scaling-and-spatial-logic-puzzles)
 
 ---
 
@@ -520,6 +526,52 @@ sequenceDiagram
     SDK-->>App: Return Model Output
 ```
 
+### Layman's Mental Model: What is "Inference" and How Does Reasoning Happen?
+
+When working with Large Language Models, you will frequently encounter the terms **inference** and **reasoning**. In simple, everyday terms, here is what is actually happening under the hood:
+
+#### 1. Training vs. Inference (Studying vs. Taking the Exam)
+
+Think of an AI model like a student preparing for a professional career:
+- **Training (The Schooling Phase):** The AI research lab gathers trillions of words from books, codebases, websites, and encyclopedias. Over several months—and using thousands of high-powered supercomputers costing millions of dollars—the model reads this material and gradually tunes billions of internal mathematical connections (called **weights**). This is a massive, one-off learning phase.
+- **Inference (The Working / Exam Phase):** Once training finishes, the model's neural network is "frozen." It stops learning and no longer updates its weights. When you send a prompt and the model calculates and returns an answer, that active answering process is called **inference**. The model is literally *inferring* (deducing and predicting) what words logically follow your question based on what it learned in school. Every single time you call an API, chat with ChatGPT, or run a local model, you are running **inference**.
+
+#### 2. How "Reasoning" Takes Place Inside Inference
+
+Not all questions can be answered well by blurting out the first word that comes to mind:
+- **Direct Inference (Immediate Next-Word Prediction):** In standard chat models, inference is a straight line. You give the model a prompt, and it immediately calculates the mathematical probability of the very next word, then the next, and the next. For basic questions like *"What is the capital of France?"*, direct inference works well because the answer ("Paris") requires straightforward memory recall.
+- **Reasoning within Inference (Scratchpad Thinking):** If someone asks you a tricky logic puzzle or a multi-step calculus problem, blurting out the first word almost always results in a mistake. To solve it, you grab a piece of scratch paper, write down intermediate steps, test different assumptions, check for trick conditions, and correct yourself before writing your final answer. **Reasoning models** do the exact same thing *inside the inference process*. Before sending back the first visible word, the model generates internal, hidden **"thinking tokens"** (a private chain-of-thought scratchpad). It evaluates different paths, double-checks its arithmetic, catches contradictions, and only outputs the verified final answer to you once it is confident.
+
+```text
++-------------------------------------------------------------------------------+
+|                      INFERENCE: DIRECT VS. REASONING                          |
++-------------------------------------------------------------------------------+
+
+  A. DIRECT INFERENCE (Standard Fast Models e.g., gpt-4.1-mini)
+  
+     User Prompt ---> [ Frozen Neural Network ] ---> Immediate Visible Output
+                      (Single forward pass per token;
+                       fast ~1s, but prone to errors on tricky logic)
+
+
+  B. REASONING WITHIN INFERENCE (Reasoning Models e.g., o1, gpt-5 with reasoning)
+  
+     User Prompt ---> [ Frozen Neural Network ]
+                             |
+                             v
+                      +---------------------------------------------+
+                      |         INTERNAL "SCRATCHPAD" TOKENS        |
+                      |  1. Break complex problem into sub-steps    |
+                      |  2. Brainstorm: "Could the answer be X?"    |
+                      |  3. Check logic: "Wait, condition Y fails!" |
+                      |  4. Backtrack and recalculate               |
+                      +---------------------------------------------+
+                             |
+                             v
+                      Final Verified Answer Returned to User
+                      (Takes 5-30s longer, but solves deep logic)
+```
+
 ### Creating the `.env` File
 
 In Cursor with your project open:
@@ -767,6 +819,15 @@ The returned response object contains metadata and candidate completions:
 - **`response.choices[0].message.content`:** Contains the raw text string generated by the model.
 - **`response.usage`:** Contains token metrics, breaking down `prompt_tokens`, `completion_tokens`, and `total_tokens` for cost tracking.
 
+### The Mechanics of Inference and Reasoning at Runtime
+
+When you call `openai.chat.completions.create()`, you are triggering an **inference request** across the network:
+1. **The Ingestion:** The API gateway receives your message array and feeds your prompt tokens into the server's GPU memory.
+2. **The Inference Cycle:** Because the model's weights are completely frozen, it does not learn anything new from your message. Instead, it runs **inference**: passing your prompt tokens through billions of mathematical calculations to predict which token has the highest probability of appearing next.
+3. **Reasoning during Generation:**
+   - In standard utility models (such as `gpt-4.1-nano` or `gpt-4o-mini`), inference generates the visible reply directly, token by token.
+   - In reasoning-capable models (such as `o1` or models configured with `reasoning_effort`), the inference engine pauses visible output to first generate an internal sequence of "reasoning tokens". These internal tokens act like a private scratchpad where the model analyzes edge cases, verifies logic, and double-checks its work before releasing the first character of the final answer to your application.
+
 ---
 
 ## System vs. User Prompts: Persona, Framing, and Behavior Control
@@ -960,6 +1021,12 @@ print(summary_response.choices[0].message.content)
 | **Mini / Standard**     | `gpt-4o-mini`                | Very Fast (1–2s)   | Low ($0.15 / 1M tokens)           | Balanced daily development, extraction, code generation                   |
 | **Frontier / Flagship** | `gpt-4o`, `o1`               | Moderate (2–10s+)  | Higher ($2.50 – $15 / 1M tokens)  | Complex multi-step reasoning, architectural planning, rigorous evaluation |
 | **Local Open-Weights**  | `llama3:8b` (via Ollama)     | Hardware-dependent | Zero (Free)                       | Local experimentation, privacy-sensitive workloads, offline development   |
+
+> [!NOTE]
+> **What is "Inference Cost" and Why Do Reasoning Models Cost More?**
+> In traditional software (like a Python sorting function), running the code costs virtually zero extra money once written. With AI, however, every single question requires passing your prompt through billions of numbers on power-hungry data center GPUs. That ongoing computing expense incurred every time the model answers is called **inference cost**.
+> 
+> When you use a **Reasoning Model** (such as `o1`), the inference cost is significantly higher because the model doesn't just generate your 50-word answer. During inference, it secretly generates hundreds or thousands of internal "thinking tokens" on its scratchpad to verify facts and eliminate logic errors. Because cloud providers bill for all GPU compute used during generation, both the hidden reasoning tokens and the visible output tokens count toward your total bill.
 
 ---
 
@@ -1364,6 +1431,9 @@ Opening a Pull Request (PR) allows maintainers to review code additions, run con
 | **Instruction Following** | Strong for summarization, tone shifts, and formatting       | Superior for deep synthesis, math, and code generation        |
 | **Recommended Role**      | Default engine for ingestion, filtering, and summarization  | Complex multi-source analysis, legal logic, or code synthesis |
 
+> [!NOTE]
+> **Matching Task Complexity to Inference Type:** Web page summarization and text digestion require straightforward language translation and condensation—tasks where standard direct inference shines. You do not need a heavy reasoning model that spends thousands of reasoning tokens to summarize a landing page; lightweight models deliver near-identical summary quality in a fraction of the time and at 90% lower inference cost.
+
 > [!TIP]
 > **Use Lightweight Models for First-Stage Ingestion:** For document summarization, extraction, and tone alteration, smaller models like `gpt-4.1-mini` or `gpt-4o-mini` offer near-parity with frontier flagship models at a fraction of the token cost and latency.
 
@@ -1457,9 +1527,9 @@ In machine learning engineering, the term **Frontier Model** describes the large
 
 The vast majority of leading models operate under a **closed-source (proprietary)** commercial distribution:
 
-- **Massive Pretraining Investments:** Training a frontier model requires tens or hundreds of millions of dollars in compute infrastructure, comprising tens of thousands of high-end GPUs or TPUs running for months.
-- **Continuous Serving Infrastructure:** Hosting inference for hundreds of millions of concurrent global requests requires distributed datacenters, custom silicon, and dynamic batching engines.
-- **Pay-As-You-Go API Monetization:** Closed-source labs monetize their investments by exposing managed cloud endpoints, charging developers per input and output token processed.
+- **Massive Pretraining Investments:** Training a frontier model requires tens or hundreds of millions of dollars in compute infrastructure, comprising tens of thousands of high-end GPUs or TPUs running for months to learn language and world knowledge.
+- **Continuous Serving Infrastructure (Hosting Inference):** "Hosting inference" means running the finished, frozen model on active servers so millions of users can send prompts and receive real-time answers 24/7. This requires massive distributed data centers, specialized AI chips, and dynamic batching engines.
+- **Pay-As-You-Go API Monetization:** Closed-source labs monetize their investments by exposing managed cloud endpoints, charging developers per input and output token processed during inference.
 
 ### Open-Source vs. Open-Weight Models
 
@@ -1479,7 +1549,7 @@ Four primary technology companies lead the closed-source frontier, each maintain
 OpenAI catalyzed the current generative AI era with the launch of ChatGPT (GPT-3.5) in late 2022.
 
 - **Evolutionary Trajectory:** Evolved from GPT-3.5 to GPT-4, GPT-4o (omnimodal native processing), and efficient lightweight derivatives like `gpt-4o-mini` and `gpt-4.1-mini`.
-- **Reasoning Convergence:** OpenAI pioneered specialized test-time reasoning models (`o1`, `o3`, `o4-mini`) that dynamically generate internal chains-of-thought before returning a final response. Modern iterations converge fast instruction-following models and deep reasoning capabilities into unified architectures like GPT-5.
+- **Reasoning Convergence:** OpenAI pioneered specialized test-time reasoning models (`o1`, `o3`, `o4-mini`) that dynamically generate internal chains-of-thought (reasoning tokens) during the inference step before returning a final response. This allows the model to "think before it speaks", trading a few seconds of runtime deliberation for dramatic accuracy gains on hard technical problems.
 - **Ecosystem Dominance:** OpenAI remains the de facto industry standard for developer tooling, function calling definitions, JSON mode, and structured outputs.
 
 ### Anthropic (Claude Family)
@@ -5331,4 +5401,1500 @@ Nano Savings Multiplier:        24.9x cheaper
 <summary><b>Question 5: What is the operational difference between a 1,000,000-token context window model (like Gemini 2.5 Flash) and a standard 128,000-token model?</b></summary>
 <br>
 <b>Answer:</b> A 1,000,000-token context window can ingest massive continuous inputs—such as the complete works of Shakespeare, entire codebases, or hours of audio/video transcripts—in a single prompt without requiring chunking, summarization, or complex vector database retrieval pipelines.
+</details>
+
+---
+
+# Building a Sales Brochure Generator: Architecture and Web Scraping Foundations
+
+## Architectural Overview of Multi-Step LLM Applications
+
+Most real-world business applications of Large Language Models require more than a single input-output interaction. While querying a single prompt against a model can summarize an isolated paragraph or answer a factual question, creating comprehensive business artifacts—such as a tailored company sales brochure—demands a coordinated multi-step workflow.
+
+A sales brochure must synthesize diverse facets of an enterprise: its primary value proposition, target customer personas, product architecture, company culture, and career opportunities. This information is rarely consolidated on a single homepage. Instead, it is distributed across disparate subpages: `/about`, `/company`, `/products`, `/solutions`, and `/careers`.
+
+To automate brochure generation, an application must follow an architectural pipeline that moves from web ingestion to intelligent filtering, deep crawling, and multi-source synthesis:
+
+```text
++-------------------------------------------------------------------------+
+|                    SALES BROCHURE GENERATION PIPELINE                   |
++-------------------------------------------------------------------------+
+
+  1. INGESTION                2. EXTRACTION & FILTERING
+  +--------------------+      +-------------------------------------------+
+  | Target Website     | ---> | Scrape Homepage & Extract All Links       |
+  | URL (Landing Page) |      | HTML Parser extracts raw anchor tags (<a>)|
+  +--------------------+      +-------------------------------------------+
+                                                    |
+                                                    v
+  3. SUBPAGE CRAWLING         +-------------------------------------------+
+  +--------------------+ <--- | LLM-Guided Semantic Filtering              |
+  | Fetch Subpages     |      | Small, fast model filters 100+ links down |
+  | (/about, /careers) |      | to relevant company overview pages        |
+  +--------------------+      +-------------------------------------------+
+           |
+           v
+  4. AGGREGATION              5. SYNTHESIS & STREAMING
+  +--------------------+      +-------------------------------------------+
+  | Combine Content    | ---> | Frontier LLM (e.g., GPT-4.1-mini)         |
+  | into Comprehensive |      | Synthesizes unified context into markdown |
+  | Context Buffer     |      | brochure and streams tokens to user       |
+  +--------------------+      +-------------------------------------------+
+```
+
+```mermaid
+flowchart TD
+    A["Target Company URL"] --> B["fetch_website_contents(url)"]
+    A --> C["fetch_website_links(url)"]
+    B --> D["Raw Homepage Text (Truncated to 2,000 chars)"]
+    C --> E["Raw Hyperlinks List (Dozens/Hundreds)"]
+    E --> F["LLM Link Classifier (JSON Mode)"]
+    F --> G["Filtered Relevant URLs (/about, /careers, /products)"]
+    G --> H["fetch_website_contents(subpage_url)"]
+    H --> I["Subpage Text Ingestion"]
+    D & I --> J["Unified Context Buffer (page_to_text)"]
+    J --> K["Brochure Synthesis Prompt (Frontier LLM)"]
+    K --> L["Live Markdown Streaming Response"]
+
+    classDef stage fill:#f8fafc,stroke:#334155,stroke-width:1px;
+    class A,B,C,D,E,F,G,H,I,J,K,L stage;
+```
+
+---
+
+## Beyond the GPT Wrapper: Verticalized AI Workflows
+
+In AI product development, applications are often colloquially classified as "GPT wrappers"—thin UI layers that do little more than forward user prompts directly to an OpenAI or Anthropic API endpoint. Thin wrappers carry low defensibility because any general-purpose frontier chat interface can replicate their output with minimal prompting.
+
+Building true enterprise value requires verticalized workflows: deep integration with domain-specific data sources, customized multi-step tool execution, and programmatic validation.
+
+### Verticalized Value Creation
+
+Consider Duolingo's integration of GPT-4 into its language learning platform. Rather than offering an open-ended chatbot, Duolingo constructed a bounded, interactive roleplay system:
+
+1. The system simulates realistic social situations (e.g., ordering a coffee at a Parisian café or purchasing a train ticket in Madrid).
+2. The model operates under strict conversational guardrails tailored to the learner's fluency level.
+3. Post-interaction evaluation logic analyzes grammar, vocabulary choices, and contextual appropriateness, giving immediate structured pedagogical feedback.
+
+In the sales domain, an automated brochure generator provides equivalent vertical value. Instead of forcing a sales representative to manually browse through ten different navigation tabs, copy text, and paste it into a prompt, the pipeline automates the research, extraction, normalization, and creative copy generation into an instantaneous, reproducible background process.
+
+---
+
+## Web Scraping Mechanics with BeautifulSoup
+
+Extracting clean text and navigation paths from raw web pages requires an HTTP client and an HTML parser. In Python, this is accomplished using the `requests` library for transport and `BeautifulSoup4` for Document Object Model (DOM) traversal.
+
+### Cleaning Raw HTML for Model Consumption
+
+Raw HTML documents contain substantial markup that provides no value to a language model while consuming significant context window tokens:
+
+- `<script>` and `<style>` blocks contain JavaScript logic and CSS declarations that clutter semantic textual content.
+- Inline form elements (`<input>`, `<button>`), navigation boilerplate, and tracking pixels dilute core messaging.
+- Unstripped whitespace, carriage returns, and duplicate tabs inflate token counts without providing structural meaning.
+
+To maximize signal-to-noise ratio, the extraction function strips out non-content tags before extracting the visible text, and caps the total character length to prevent context exhaustion in downstream prompts.
+
+```python
+import os
+import requests
+from bs4 import BeautifulSoup
+
+# Define standard headers to simulate a modern desktop browser
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/117.0.0.0 Safari/537.36"
+    )
+}
+
+def fetch_website_contents(url: str) -> str:
+    """
+    Downloads the HTML for a given URL, strips non-content elements,
+    and returns up to 2,000 characters of cleaned textual content.
+    """
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        return f"Error fetching {url}: {e}"
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Strip script, style, image, and input tags
+    for element in soup(["script", "style", "img", "input"]):
+        element.decompose()
+
+    # Extract clean text and normalize whitespace
+    text = soup.get_text(separator=" ", strip=True)
+
+    # Truncate to first 2,000 characters to conserve context tokens
+    return text[:2000]
+
+
+def fetch_website_links(url: str) -> list[str]:
+    """
+    Fetches the web page and extracts all valid hyperlink targets (href).
+    """
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    links = []
+
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"].strip()
+        if href:
+            links.append(href)
+
+    return links
+```
+
+```text
+[Expected Output Sample]
+>>> content = fetch_website_contents("https://example.com")
+>>> print(content[:250])
+Example Domain This domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission. More information...
+
+>>> links = fetch_website_links("https://example.com")
+>>> print(links)
+['https://www.iana.org/domains/example']
+```
+
+> [!IMPORTANT]
+> **User-Agent Headers and Bot Protection:** Many modern web servers immediately reject HTTP requests that omit a `User-Agent` header or use default library identifiers (such as `python-requests/2.x`). Sending a standard browser User-Agent header helps avoid automated `403 Forbidden` blocks during legitimate content ingestion.
+
+> [!TIP]
+> **Token Budgeting via Truncation:** Truncating text to 2,000 characters (approximately 400 to 500 tokens) provides sufficient semantic overview of a landing page while guaranteeing that multi-page aggregation will not exhaust model context limits or inflate API costs.
+
+---
+
+## Overcoming Semantic Ambiguity in Hyperlink Discovery
+
+A standard commercial website contains dozens or hundreds of hyperlinks: social media redirects, privacy policies, terms of service, cookie preferences, language selectors, relative navigation anchors, and deep product links.
+
+### Why Rule-Based Heuristics Fail
+
+Traditional software engineering relies on regular expressions or keyword matching to find relevant pages (e.g., checking if `"about"` or `"careers"` appears in the URL). This approach breaks down across diverse corporate web architectures:
+
+- **Diverse Naming Conventions:** Companies label corporate pages unpredictably: `/about`, `/about-us`, `/our-story`, `/who-we-are`, `/mission`, `/team`, or `/company`.
+- **Evolving Career Paths:** Jobs pages might be located at `/careers`, `/jobs`, `/join-our-team`, `/work-with-us`, or offloaded to third-party applicant tracking systems (e.g., `boards.greenhouse.io/company` or `jobs.lever.co/company`).
+- **False Positives:** A string check for `"product"` matches product documentation, marketing blogs, individual SKU pages, or support articles.
+- **Relative vs. Absolute Paths:** Links may appear as full URIs (`https://example.com/company/about`), root-relative paths (`/company/about`), or page-relative paths (`../about`).
+
+### The LLM as an Intelligent Link Filter
+
+An LLM can read an unstructured list of URLs and evaluate their semantic relevance. Rather than applying brittle string-matching rules, a model infers the conceptual role of each link in relation to a corporate profile:
+
+| Filtering Strategy              | Implementation Mechanism                      | Resilience to URL Variations                               | False Positive Rate                          | Setup Overhead                   |
+| :------------------------------ | :-------------------------------------------- | :--------------------------------------------------------- | :------------------------------------------- | :------------------------------- |
+| **Keyword Substring Matching**  | `if "about" in url.lower():`                  | Very Poor (fails on `/story`, `/team`, `/mission`)         | High (matches `/blog/about-our-release`)     | Minimal code, high maintenance   |
+| **Regular Expressions (Regex)** | `re.search(r"/(about\|careers\|team)/", url)` | Poor (brittle against unexpected path hierarchies)         | Medium (matches non-relevant subdirectories) | High regex complexity            |
+| **LLM Semantic Selection**      | Chat Completions Prompt with JSON schema      | Excellent (infers intent from path words and slug context) | Extremely Low                                | Minimal code, relies on API call |
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: What architectural limitation prevents a single-prompt LLM call from generating an accurate, detailed company sales brochure?</b></summary>
+<br>
+<b>Answer:</b> A single-prompt call relies solely on the model's pre-trained parametric memory (which may be outdated or contain hallucinations) or on text from a single webpage. Critical corporate details—such as leadership, company culture, specific product lines, and career paths—are distributed across separate subpages (/about, /careers, /products) that must be ingested through multi-step crawling.
+</details>
+
+<details>
+<summary><b>Question 2: Why is decomposing or stripping `script` and `style` elements critical before passing web content to an LLM?</b></summary>
+<br>
+<b>Answer:</b> Raw JavaScript logic and CSS style declarations contain heavy syntax and boilerplate that carry zero semantic value for understanding a company's business model. Removing them dramatically reduces token consumption, keeps API costs down, and prevents noisy code from distracting the model's attention mechanisms.
+</details>
+
+<details>
+<summary><b>Question 3: What distinguishes a durable vertical AI application from a superficial "GPT wrapper"?</b></summary>
+<br>
+<b>Answer:</b> A superficial GPT wrapper merely forwards raw user text directly to a foundation model API with basic system instructions. A durable vertical AI application orchestrates specialized domain workflows: automating data ingestion, using programmatic tools, cleaning and filtering unstructured inputs, chaining multiple task-specific model calls, and rendering structured domain artifacts.
+</details>
+
+<details>
+<summary><b>Question 4: Why do string-matching heuristics like `if "about" in link` fail when filtering website navigation links?</b></summary>
+<br>
+<b>Answer:</b> Websites use unpredictable naming conventions (such as /our-story, /mission, /who-we-are, or /team) that do not include the word "about", causing hardcoded checks to miss essential pages. Conversely, substrings can produce false positives by matching unrelated paths like /blog/what-to-know-about-v2.
+</details>
+
+<details>
+<summary><b>Question 5: Why is User-Agent header spoofing necessary when writing basic web scraping functions in Python?</b></summary>
+<br>
+<b>Answer:</b> Web servers frequently block automated clients whose User-Agent identifies them as script libraries (like python-requests) with HTTP 403 Forbidden errors. Setting a standard browser User-Agent header ensures requests appear as normal browser traffic during legitimate data extraction.
+</details>
+
+---
+
+# Extracting Structured Links with JSON Prompts and the Chat Completions API
+
+## The Need for Structured Machine-Readable Outputs in Agentic Pipelines
+
+When language models operate within automated pipelines, freeform natural language output becomes an engineering bottleneck. If an LLM is asked: _"Which of these links are relevant to a company brochure?"_, it might reply with a polite conversational paragraph:
+
+> _"Certainly! I reviewed the website links you provided. The most relevant links for your brochure would be the About Us page at /company/about, the Leadership team page, and the Careers portal located at https://careers.example.com."_
+
+While clear to a human reader, this conversational text cannot be parsed by standard code without fragile string splitting or custom regex extractors. If the model alters its conversational preamble on the next request, downstream parsers break.
+
+To build reliable multi-step workflows, the model must return structured, machine-readable data—specifically valid **JSON (JavaScript Object Notation)**—that Python's `json.loads()` can directly deserialize into native lists and dictionaries.
+
+---
+
+## The LLM Training Triad: Natural Language, Translation, and Code
+
+Modern large language models possess a native ability to produce structured formats without custom fine-tuning. This capability stems from the diverse data distributions used during pre-training, which can be conceptualized as a training triad:
+
+```text
++-------------------------------------------------------------------------+
+|                         THE LLM TRAINING TRIAD                          |
++-------------------------------------------------------------------------+
+
+                       1. NATURAL LANGUAGE
+                      (English, Prose, Articles)
+                                 /\
+                                /  \
+                               /    \
+                              /      \
+                             /        \
+                            /          \
+                           /            \
+                          v              v
+      2. MULTILINGUAL DATA  <---------->  3. CODE & STRUCTURED SYNTAX
+     (Spanish, Mandarin, etc.)             (Python, JSON, YAML, SQL)
+```
+
+1. **Natural Language Corpora:** Billions of tokens of books, encyclopedias, articles, and websites establish general reasoning, world knowledge, and semantic understanding.
+2. **Multilingual Data:** Exposure to diverse human languages trains the model's internal representation to translate semantic concepts seamlessly across differing linguistic structures.
+3. **Code and Structured Syntax:** Hundreds of billions of tokens from GitHub repositories, programming documentation, API specifications, and configuration files expose the model to strict syntactic rules: opening and closing brackets, key-value mappings, quotation rules, and indentation standards.
+
+Because JSON is the universal lingua franca of web APIs and software development, frontier models treat JSON generation with the same fluency as standard English prose.
+
+---
+
+## Schema Enforcement via One-Shot Prompt Engineering
+
+To guarantee that the model outputs the exact JSON structure required by downstream code, the prompt must define the expected schema unambiguously. The most effective approach is **one-shot prompting**: providing a single concrete example of the desired JSON payload inside the system prompt.
+
+### Prompt Construction for Hyperlink Classification
+
+The prompt must instruct the model to act as a link classifier, define what qualifies as "relevant" (company overviews, leadership, mission, products, careers), explicitly forbid irrelevant paths (Terms of Service, Privacy Policies, cookie settings), and specify the target JSON shape:
+
+```python
+link_system_prompt = """You are provided with a list of links found on a webpage.
+You are able to decide which of the links would be most relevant to include in a brochure about the company,
+such as links to an About page, or a Company page, or Careers/Jobs pages.
+
+You should respond in JSON as in this example:
+{
+    "links": [
+        {"type": "about page", "url": "https://full.url/goes/here/about"},
+        {"type": "careers page", "url": "https://full.url/goes/here/careers"}
+    ]
+}
+"""
+
+def get_links_user_prompt(url: str, links: list[str]) -> str:
+    """
+    Constructs the user prompt containing target URL and extracted links.
+    """
+    links_text = "\n".join(links)
+    return f"""Here is the list of links on the website of {url} -
+please decide which of these are relevant web links for a brochure about the company,
+respond with the full https URL in JSON format. Do not include Terms of Service, Privacy, email links.
+
+Links (some might be relative links):
+{links_text}
+"""
+```
+
+---
+
+## Deterministic JSON Generation with OpenAI JSON Mode
+
+Even with one-shot examples, autoregressive models occasionally wrap JSON blocks in Markdown code fences (e.g., `json ... `) or include conversational pleasantries ("Here is the JSON you requested:").
+
+To eliminate this ambiguity, OpenAI introduced **JSON Mode** via the `response_format={"type": "json_object"}` parameter.
+
+### How JSON Mode Works
+
+When JSON Mode is activated, the API runtime constrains the model's token sampling logits at generation time. Tokens that would violate valid JSON grammar (such as unquoted keys, missing commas, or trailing text outside the root object) are masked out, mathematically forcing the model to produce valid JSON.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Python Application
+    participant API as OpenAI API Gateway
+    participant LLM as GPT Inference Engine
+
+    Client->>API: POST /v1/chat/completions (response_format={"type": "json_object"})
+    Note over API: Validates prompt contains the string "JSON"
+    API->>LLM: Forward system and user prompts
+    Note over LLM: Logit bias enforces valid JSON token generation
+    LLM-->>API: Stream/Return validated JSON string payload
+    API-->>Client: HTTP 200 OK with choices[0].message.content
+    Note over Client: json.loads() cleanly parses dictionary without regex
+```
+
+### Complete Implementation
+
+```python
+import json
+import os
+from openai import OpenAI
+
+# Initialize client with API key from environment
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Use a lightweight, high-speed model for classification utility tasks
+MODEL = "gpt-4o-mini"
+
+def select_relevant_links(url: str, links: list[str]) -> dict:
+    """
+    Sends raw links to the model with JSON Mode enabled,
+    returning a structured dictionary of relevant brochure links.
+    """
+    user_prompt = get_links_user_prompt(url, links)
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": link_system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        response_format={"type": "json_object"}
+    )
+
+    # Parse the guaranteed JSON response directly
+    raw_content = response.choices[0].message.content
+    return json.loads(raw_content)
+```
+
+```text
+[Expected Output Sample]
+>>> sample_links = [
+...     "/about", "/careers", "/privacy-policy", "/terms",
+...     "https://twitter.com/example", "/products/analytics", "mailto:info@example.com"
+... ]
+>>> result = select_relevant_links("https://example.com", sample_links)
+>>> import pprint; pprint.pprint(result)
+{'links': [{'type': 'about page', 'url': 'https://example.com/about'},
+           {'type': 'careers page', 'url': 'https://example.com/careers'},
+           {'type': 'products page', 'url': 'https://example.com/products/analytics'}]}
+```
+
+> [!IMPORTANT]
+> **The Mandatory "JSON" Prompt Keyword:** When passing `response_format={"type": "json_object"}` to the OpenAI API, your prompt messages (system or user) **must** explicitly contain the word `"JSON"` (case-insensitive). If the word `"JSON"` is missing from the message payload, the API will fail immediately with an HTTP 400 Bad Request:
+> `'messages' must contain the word 'json' in some form, to use 'response_format' of type 'json_object'`.
+
+> [!TIP]
+> **Choosing Utility Models for Classification:** High-volume intermediary tasks (like link filtering, classification, or entity extraction) do not require full-scale flagship models like GPT-4o. Lightweight models (such as `gpt-4o-mini`) execute classification in a fraction of the time at roughly 95% lower cost while maintaining equivalent formatting precision.
+
+---
+
+## Comparison of Structured Output Strategies
+
+| Strategy                                    | Implementation                                           | Parsing Reliability                                       | Failure Modes                                                         | API Cost / Overhead                                 |
+| :------------------------------------------ | :------------------------------------------------------- | :-------------------------------------------------------- | :-------------------------------------------------------------------- | :-------------------------------------------------- |
+| **Freeform Prompting**                      | "List relevant links separated by commas"                | Low                                                       | Conversational text, missing commas, non-deterministic formatting     | Lowest setup, high parsing failure rate             |
+| **One-Shot In-Context Prompting**           | System prompt includes concrete JSON example             | Moderate to High                                          | Markdown code fences (````json`), leading/trailing pleasantries       | Normal API cost, occasional `json.loads` ValueError |
+| **API JSON Mode (`response_format`)**       | `response_format={"type": "json_object"}`                | Very High (Syntactically guaranteed JSON)                 | Schema deviation (valid JSON, but keys might vary if prompt is vague) | Zero extra cost, requires "json" keyword in prompt  |
+| **Strict Structured Outputs (JSON Schema)** | `response_format={"type": "json_schema", "schema": ...}` | Absolute (Guaranteed valid JSON & strictly enforced keys) | Generation rejection if model cannot satisfy rigid schema             | Minimal latency overhead on first compilation       |
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: Why is freeform natural language text unsuitable for passing data between intermediate stages of an automated software pipeline?</b></summary>
+<br>
+<b>Answer:</b> Freeform natural language is inherently non-deterministic; the model may include conversational preambles, varied punctuation, markdown code blocks, or explanatory commentary that standard parsing code cannot reliably deserialize without throwing runtime exceptions.
+</details>
+
+<details>
+<summary><b>Question 2: What training characteristics give large language models their high proficiency in generating valid JSON and code syntax?</b></summary>
+<br>
+<b>Answer:</b> Large language models are trained extensively on vast corpora of source code (e.g., from GitHub, documentation, and API logs). This exposure teaches the attention mechanisms strict grammatical conventions—such as paired brackets, syntax rules, key-value mappings, and indentation hierarchies.
+</details>
+
+<details>
+<summary><b>Question 3: What fatal error occurs if you pass `response_format={"type": "json_object"}` to OpenAI without using the word "JSON" in your prompts?</b></summary>
+<br>
+<b>Answer:</b> The OpenAI API gateway rejects the call and throws an HTTP 400 Bad Request error stating that `'messages' must contain the word 'json' in some form` to use that response format.
+</details>
+
+<details>
+<summary><b>Question 4: What is the primary difference between OpenAI's standard JSON Mode (`json_object`) and Strict JSON Schema mode (`json_schema`)?</b></summary>
+<br>
+<b>Answer:</b> Standard JSON Mode guarantees only that the returned output is syntactically valid JSON (no unclosed brackets or trailing commas), but does not strictly guarantee the presence of specific keys. Strict JSON Schema mode compiles a formal schema and mathematically forces the model to match the exact keys, types, and required fields specified.
+</details>
+
+<details>
+<summary><b>Question 5: Why is it best practice to use lightweight models (like `gpt-4o-mini`) rather than frontier models for link extraction?</b></summary>
+<br>
+<b>Answer:</b> Link extraction is a low-complexity classification task that does not require deep creative reasoning. Lightweight models execute the task much faster (lower latency), cost approximately 90-95% less per token, and reliably adhere to the provided JSON schema.
+</details>
+
+---
+
+# Chaining LLM Calls: Multi-Page Web Crawling and Context Aggregation
+
+## Principles of LLM Chaining and Sequential Execution
+
+In complex AI engineering workflows, attempting to perform all tasks in a single massive prompt often results in degraded performance, hallucination, or context window overflow. **LLM Chaining** is an architectural pattern where a multi-stage process is decomposed into discrete, sequential steps:
+
+1. The output of an upstream operation (which may be an LLM call or a deterministic program) is validated and normalized.
+2. The extracted payload informs the next programmatic action (such as an API call, web scrape, or database query).
+3. The newly fetched data is assembled and passed into a downstream LLM call for synthesis.
+
+```text
++-------------------------------------------------------------------------+
+|                  SEQUENTIAL LLM CHAINING ARCHITECTURE                   |
++-------------------------------------------------------------------------+
+
+  +-----------------------+
+  | Landing Page Scraping | -> Returns raw text (2,000 chars) & link list
+  +-----------------------+
+              |
+              v
+  +-----------------------+
+  | LLM Call 1 (Filter)   | -> Uses JSON Mode to classify relevant links
+  +-----------------------+
+              |
+              v
+  +-----------------------+
+  | Python Normalization  | -> Deserializes JSON, resolves relative paths
+  +-----------------------+
+              |
+              v
+  +-----------------------+
+  | Subpage Web Scraping  | -> Deterministically fetches /about, /careers
+  +-----------------------+
+              |
+              v
+  +-----------------------+
+  | Context Aggregator    | -> Combines landing page + subpages into buffer
+  +-----------------------+
+              |
+              v
+  +-----------------------+
+  | LLM Call 2 (Brochure) | -> Synthesizes final corporate marketing brochure
+  +-----------------------+
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User Script
+    participant Crawl as Web Scraper (BeautifulSoup)
+    participant Model1 as Link Classifier (gpt-4o-mini)
+    participant Agg as Context Aggregator
+    participant Model2 as Brochure Synthesizer (gpt-4.1-mini)
+
+    User->>Crawl: Fetch Landing Page (https://huggingface.co)
+    Crawl-->>User: Returns Landing Text & 150 Links
+    User->>Model1: Prompt with link list + JSON Schema
+    Model1-->>User: {"links": [{"url": "https://huggingface.co/about"}, ...]}
+    loop For each relevant link
+        User->>Crawl: Fetch Subpage Content
+        Crawl-->>Agg: Return subpage text (truncated)
+    end
+    Agg-->>User: Unified Context Buffer (Landing + Subpages)
+    User->>Model2: Generate Brochure from Context Buffer
+    Model2-->>User: Stream Final Sales Brochure
+```
+
+---
+
+## Parsing JSON Payloads and Handling URL Normalization
+
+Once the link classification model returns its JSON payload, downstream code must deserialize the string and handle common edge cases before making network requests.
+
+### Key Normalization Challenges
+
+1. **Schema Variations:** The model may return an empty list if no links match, or place URLs under slightly varied key names if prompting is not strictly enforced. Code should use `.get("links", [])` to prevent `KeyError` crashes.
+2. **Relative Hyperlinks:** Websites frequently use root-relative paths (`/about`, `/company/team`) or protocol-relative paths (`//cdn.example.com`). If an application attempts to execute `requests.get("/about")`, the HTTP client raises an `InvalidURL` exception.
+3. **URL Joining:** Using Python's standard `urllib.parse.urljoin` reliably resolves relative paths against the base URL without manual string slicing.
+
+```python
+import json
+from urllib.parse import urljoin, urlparse
+
+def normalize_url(base_url: str, link_url: str) -> str:
+    """
+    Converts relative paths into fully qualified absolute HTTP/HTTPS URLs.
+    """
+    link_url = link_url.strip()
+    # Resolve relative paths against the base domain
+    full_url = urljoin(base_url, link_url)
+
+    # Ensure scheme is http or https
+    parsed = urlparse(full_url)
+    if parsed.scheme not in ("http", "https"):
+        return ""
+
+    return full_url
+```
+
+---
+
+## Recursive Subpage Crawling and Context Assembly
+
+With URL normalization in place, the application crawls each identified subpage and aggregates its text into a unified multi-page context buffer.
+
+Each section is tagged with clear Markdown delimiters (e.g., `### Webpage Content for <URL>`) so the synthesis model can attribute specific facts, metrics, and quotes to their originating pages.
+
+```python
+def fetch_page_and_all_relevant_links(url: str) -> str:
+    """
+    Crawls a landing page, asks an LLM to identify relevant subpages,
+    fetches text from all selected links, and compiles a unified context buffer.
+    """
+    print(f"Scraping landing page: {url}")
+    landing_text = fetch_website_contents(url)
+    raw_links = fetch_website_links(url)
+
+    print(f"Discovered {len(raw_links)} raw links. Selecting relevant pages...")
+    extracted = select_relevant_links(url, raw_links)
+    relevant_links = extracted.get("links", [])
+
+    # Begin building the unified context buffer
+    aggregated_context = [
+        f"### Primary Landing Page Content ({url}):\n{landing_text}\n"
+    ]
+
+    # Crawl each identified subpage
+    for link_item in relevant_links:
+        sub_url = link_item.get("url", "")
+        page_type = link_item.get("type", "relevant page")
+
+        # Normalize relative links if needed
+        clean_url = normalize_url(url, sub_url)
+        if not clean_url:
+            continue
+
+        print(f"Fetching {page_type}: {clean_url}")
+        subpage_text = fetch_website_contents(clean_url)
+
+        aggregated_context.append(
+            f"### Webpage Content for {page_type.upper()} ({clean_url}):\n{subpage_text}\n"
+        )
+
+    # Join into a single multi-page context document
+    return "\n".join(aggregated_context)
+```
+
+```text
+[Expected Output Sample]
+>>> full_context = fetch_page_and_all_relevant_links("https://huggingface.co")
+Scraping landing page: https://huggingface.co
+Discovered 184 raw links. Selecting relevant pages...
+Fetching about page: https://huggingface.co/about
+Fetching careers page: https://huggingface.co/join-us
+Fetching models page: https://huggingface.co/models
+
+>>> print(full_context[:400])
+### Primary Landing Page Content (https://huggingface.co):
+The platform where the machine learning community collaborates on models, datasets, and applications. Explore over 500,000 models, 100,000 datasets, and 150,000 Spaces...
+
+### Webpage Content for ABOUT PAGE (https://huggingface.co/about):
+We are on a mission to democratize good machine learning. Founded in 2016 by Clément Delangue, Julien Chaumond, and Thomas Wolf...
+```
+
+---
+
+## Crawling Architecture Comparison
+
+| Crawling Pattern                                | How It Works                                               | Strengths                                           | Failure Modes & Risks                                            |
+| :---------------------------------------------- | :--------------------------------------------------------- | :-------------------------------------------------- | :--------------------------------------------------------------- |
+| **Single-Page Ingestion**                       | Scrapes only the root landing page                         | Fastest execution, lowest token overhead            | Misses in-depth company background, careers, and product details |
+| **Unconstrained Spider / Breadth-First Search** | Recursively follows all anchor tags up to depth N          | Exhaustive coverage                                 | High network overhead, scraping traps, token budget explosion    |
+| **LLM-Chained Semantic Crawling**               | Model selects 3-5 high-value links based on brochure goals | High signal-to-noise ratio, controlled token budget | Dependent on landing page containing functional navigation links |
+
+> [!IMPORTANT]
+> **Scraping Limitations and Status Codes:** Not all links selected by the LLM will be crawlable. Enterprise websites may place careers portals on external domains protected by Cloudflare bot management, returning `403 Forbidden` or `429 Too Many Requests`. The scraper must use `try...except` blocks to handle network failures gracefully without crashing the overall pipeline.
+
+> [!TIP]
+> **Context Window Management:** By capping each crawled page to 2,000 characters and restricting the LLM to 3-5 subpages, the entire aggregated context stays within approximately 2,500 to 3,500 tokens—well below the context limits of modern frontier models.
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: What is the primary benefit of chaining multiple specialized LLM calls rather than executing a single comprehensive prompt?</b></summary>
+<br>
+<b>Answer:</b> Chaining decomposes a complex task into manageable, specialized subtasks. This allows developers to use small, inexpensive models for intermediary tasks (like link filtering), perform deterministic validation and web requests in code between calls, and reserve expensive frontier models for high-value synthesis.
+</details>
+
+<details>
+<summary><b>Question 2: What exception is raised if an HTTP client attempts to execute `requests.get("/about")` directly, and how is it resolved?</b></summary>
+<br>
+<b>Answer:</b> It raises an `InvalidURL` or `MissingSchema` exception because the relative path lacks a protocol and domain. This is resolved by passing the base URL and the relative path into Python's `urllib.parse.urljoin(base_url, link_url)`.
+</details>
+
+<details>
+<summary><b>Question 3: Why should dictionary keys in model-generated JSON be retrieved using `.get("links", [])` rather than direct index access (`result["links"]`)?</b></summary>
+<br>
+<b>Answer:</b> Even in JSON mode, if the model encounters an edge case (such as a page with no links) it might omit keys or return an alternative structure. Using `.get()` provides a default fallback and prevents uncaught `KeyError` exceptions from terminating the script.
+</details>
+
+<details>
+<summary><b>Question 4: Why are Markdown headers (like `### Webpage Content for <URL>`) added between crawled pages in the aggregated context?</b></summary>
+<br>
+<b>Answer:</b> Clear section delimiters allow the synthesis model's attention heads to track data provenance, distinguishing between homepage marketing copy, detailed executive biographies from the About page, and job requirements from the Careers page.
+</details>
+
+<details>
+<summary><b>Question 5: How does targeted semantic link selection protect the application from "crawling traps"?</b></summary>
+<br>
+<b>Answer:</b> Purely programmatic crawlers can get stuck in infinite pagination loops, calendar widgets, or endless query strings. An LLM acts as an intelligent filter, selecting only 3 to 5 high-value corporate pages and ignoring cyclical navigation links.
+</details>
+
+---
+
+# Generating Company Brochures with Streaming Output and Markdown UI
+
+## Synthesizing Multi-Page Context into a Comprehensive Sales Brochure
+
+The final stage of the brochure pipeline takes the aggregated multi-page context and synthesizes it into a professional, cohesive sales document. This synthesis requires a frontier reasoning model (such as `gpt-4.1-mini`, `gpt-4o-mini`, or `gpt-4o`) capable of cross-referencing information, summarizing key strengths, and formatting the output into clean GitHub-Flavored Markdown.
+
+A well-structured corporate brochure should include:
+
+- **Company Overview & Mission:** Core mission and enterprise identity.
+- **Product & Solution Offerings:** Key platforms, tools, and technical capabilities.
+- **Culture & Values:** Founding philosophy, work environment, and team ethos.
+- **Customers & Community:** Notable clients, open-source adoption, and market impact.
+- **Careers & Opportunities:** Current hiring focus, technical roles, and employee benefits.
+
+---
+
+## Prompt Engineering for Professional Corporate Synthesis
+
+The synthesis prompt must instruct the model to adopt the persona of a senior marketing analyst, adhere strictly to the ingested source material, and avoid speculative hallucinations.
+
+```text
++-------------------------------------------------------------------------+
+|                  SYNTHESIS PROMPT ENGINEERING DESIGN                    |
++-------------------------------------------------------------------------+
+
+  +---------------------------------------------------------------------+
+  | SYSTEM PROMPT: Behavioral Persona & Formatting Guardrails           |
+  | - Act as an assistant analyzing multiple corporate web pages.       |
+  | - Produce a structured company sales brochure in clean Markdown.    |
+  | - Emphasize culture, customers, products, and careers.             |
+  | - Guardrail: Only include claims supported by the provided text.    |
+  +---------------------------------------------------------------------+
+                                    |
+                                    v
+  +---------------------------------------------------------------------+
+  | USER PROMPT: Dynamic Variables & Grounded Evidence                  |
+  | - Company Name: {company_name}                                      |
+  | - Target Domain: {url}                                              |
+  | - Context: Aggregated multi-page content buffer                     |
+  +---------------------------------------------------------------------+
+```
+
+```python
+brochure_system_prompt = """You are an expert marketing strategist and technical analyst.
+You analyze the contents of several pages of a company website and create a comprehensive,
+engaging sales brochure about the company. The brochure should be tailored for prospective customers,
+partners, and investors.
+
+Format your output in clean GitHub-Flavored Markdown.
+Organize your response with the following sections:
+- Company Overview & Mission
+- Key Products & Core Capabilities
+- Company Culture & Founding Values
+- Customers, Partners & Community Impact
+- Career Opportunities & Working at the Company
+
+Stick strictly to the provided website text. If specific information (like customer names or benefits)
+is not provided in the text, omit that section or state that information is available upon inquiry."""
+
+def get_brochure_user_prompt(company_name: str, url: str, relevant_content: str) -> str:
+    return f"""You are looking at a company called: {company_name} ({url})
+
+Here are the contents of its landing page and other relevant pages gathered from its website.
+Use this information to build an engaging, well-structured sales brochure in markdown:
+
+{relevant_content}
+"""
+```
+
+---
+
+## Real-Time Token Streaming Mechanics in OpenAI SDK
+
+When generating comprehensive multi-section documents, the model produces between 600 and 1,500 output tokens. In standard blocking mode (`stream=False`), the client application must wait for the entire generation to complete before displaying any output.
+
+### The Latency Problem: Time-To-First-Token (TTFT)
+
+```text
+BLOCKING REQUEST (stream=False):
+Client Sent ------------------------ (Waiting 15-25 seconds) -------------------------> Response Received
+[User experiences high latency, frozen screen, and zero feedback]
+
+STREAMING REQUEST (stream=True):
+Client Sent -> chunk1 -> chunk2 -> chunk3 -> chunk4 ... -> Stream Completed
+             (<500ms)
+[User sees immediate real-time typing feedback, perceived latency drops dramatically]
+```
+
+### Implementing Token Streaming
+
+To enable streaming, pass `stream=True` to `client.chat.completions.create()`. Instead of returning a completed `ChatCompletion` object, the API returns a generator yielding `ChatCompletionChunk` objects:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": brochure_system_prompt},
+        {"role": "user", "content": user_prompt}
+    ],
+    stream=True
+)
+
+for chunk in response:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
+```
+
+Inside each chunk, `chunk.choices[0].delta` contains newly generated incremental text fragments under `.content`.
+
+---
+
+## Live Markdown Rendering in Interactive Python Environments
+
+While `print(delta, end="", flush=True)` provides basic terminal streaming, running this in a Jupyter notebook or interactive environment renders raw unformatted Markdown syntax.
+
+To create an interactive notebook UI, use `IPython.display`:
+
+1. Use `display()` with a unique `display_id` to create a live display target.
+2. Accumulate incoming chunks into a running response string.
+3. Call `update_display(Markdown(accumulated_text), display_id=...)` on each chunk to re-render the formatted Markdown in place.
+
+```python
+from IPython.display import Markdown, display, update_display
+
+def create_brochure(company_name: str, url: str):
+    """
+    Crawls the company website, aggregates subpage content, and streams
+    a formatted Markdown brochure live into the notebook UI.
+    """
+    # Step 1 & 2: Ingest landing page and crawl relevant subpages
+    aggregated_context = fetch_page_and_all_relevant_links(url)
+
+    # Step 3: Construct synthesis prompt
+    user_prompt = get_brochure_user_prompt(company_name, url, aggregated_context)
+
+    # Initialize live display handle in IPython / Jupyter
+    display_handle = display(Markdown("### Generating brochure..."), display_id=True)
+
+    # Step 4: Stream completion from frontier model
+    stream = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": brochure_system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        stream=True
+    )
+
+    accumulated_markdown = ""
+    for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            accumulated_markdown += content
+            # Dynamically update the rendered Markdown cell
+            update_display(Markdown(accumulated_markdown), display_id=display_handle.display_id)
+
+    return accumulated_markdown
+```
+
+```text
+[Expected Output Sample]
+>>> brochure = create_brochure("Hugging Face", "https://huggingface.co")
+Scraping landing page: https://huggingface.co
+Discovered 184 raw links. Selecting relevant pages...
+Fetching about page: https://huggingface.co/about
+Fetching careers page: https://huggingface.co/join-us
+
+# Hugging Face: The Collaborative Hub for Machine Learning
+
+## Company Overview & Mission
+Hugging Face is the premier open-source platform driving the democratization of artificial intelligence. By providing a centralized ecosystem for hosting models, datasets, and interactive demos, Hugging Face serves as the foundational workbench for modern AI engineers and enterprise researchers worldwide.
+
+## Key Products & Core Capabilities
+- **The Hugging Face Hub:** Over 500,000 pre-trained models and 100,000 datasets spanning NLP, computer vision, audio, and multimodal AI.
+- **Transformers Library:** Industry-standard open-source framework with billions of downloads, simplifying model training, fine-tuning, and inference.
+- **Inference Endpoints & Spaces:** Turnkey production hosting solutions allowing companies to deploy scalable model APIs with dedicated hardware acceleration.
+
+## Company Culture & Founding Values
+Founded on principles of radical transparency and open scientific collaboration, Hugging Face values curiosity, accessibility, and community contribution over proprietary silos.
+
+## Career Opportunities
+With an active global distributed workforce, Hugging Face regularly hires across machine learning engineering, developer advocacy, and distributed systems infrastructure.
+```
+
+---
+
+## Delivery Mechanism Trade-offs
+
+| Generation Mode                   | Mechanism                          | Time-To-First-Token (TTFT) | Best Use Case                                               | Engineering Complexity                        |
+| :-------------------------------- | :--------------------------------- | :------------------------- | :---------------------------------------------------------- | :-------------------------------------------- |
+| **Blocking Response**             | `stream=False`                     | High (10–30s)              | Headless batch pipelines, automated cron scripts, ETL tasks | Minimal (single variable assignment)          |
+| **Terminal Streaming**            | `stream=True` + `sys.stdout.write` | Ultra Low (<500ms)         | Command-line utilities, real-time terminal diagnostics      | Low (chunk iteration loop)                    |
+| **Dynamic In-Place UI Streaming** | `stream=True` + `update_display`   | Ultra Low (<500ms)         | Jupyter notebooks, web interfaces (SSE / WebSockets)        | Moderate (requires display ID state tracking) |
+
+> [!TIP]
+> **Debouncing Display Updates:** In web frontends or high-throughput Jupyter notebooks, updating the UI on every single token chunk (often 1-3 characters) can strain DOM rendering engines. Throttling or accumulating chunks into 10-token batches before triggering a UI re-render improves frame rates during fast token generation.
+
+> [!CAUTION]
+> **Handling Incomplete Sentences in Streaming:** While streaming chunks deliver fast visual feedback, never attempt to parse or deserialize partial JSON or structured code from individual chunks. Streaming is designed for human-facing textual interfaces; structured machine-readable payloads should be accumulated completely before parsing.
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: What is Time-To-First-Token (TTFT), and why is it a critical UX metric in generative AI applications?</b></summary>
+<br>
+<b>Answer:</b> TTFT measures the latency between when a user submits a prompt and when the model returns its first visible character. Lowering TTFT via streaming transforms user experience from staring at an unresponsive blank screen into immediate interactive engagement.
+</details>
+
+<details>
+<summary><b>Question 2: In the OpenAI Python SDK, what object attribute contains the incremental text chunk during a streaming response?</b></summary>
+<br>
+<b>Answer:</b> Incremental text is located at `chunk.choices[0].delta.content`. It contains a string fragment when tokens are emitted, or `None` during metadata or completion events.
+</details>
+
+<details>
+<summary><b>Question 3: How does `IPython.display.update_display` prevent Jupyter notebooks from creating hundreds of separate output blocks during a stream?</b></summary>
+<br>
+<b>Answer:</b> By passing a unique `display_id` to `display()`, a single persistent visual container is created in the cell. Subsequent calls to `update_display(..., display_id=...)` replace the existing rendered DOM element in place rather than appending new output below it.
+</details>
+
+<details>
+<summary><b>Question 4: Why should generative synthesis prompts include explicit negative guardrails (e.g., "omit sections if details are not provided in the text")?</b></summary>
+<br>
+<b>Answer:</b> Frontier language models are autoregressive and incentivized to provide complete responses. Without negative constraints, when asked for details not found in the scraped text (such as specific customer names or benefits packages), the model will hallucinate plausible but fabricated details.
+</details>
+
+<details>
+<summary><b>Question 5: Why is streaming ill-suited for intermediate steps that output structured JSON for downstream parsing?</b></summary>
+<br>
+<b>Answer:</b> Incomplete streaming fragments represent broken, malformed JSON that cannot be parsed by `json.loads()`. Streaming is intended for human-facing interfaces; intermediate programmatic steps should execute synchronously or wait for full payload accumulation before processing.
+</details>
+
+---
+
+# Connecting to Multiple Frontier Models: OpenAI, Anthropic, Gemini, Groq, and OpenRouter
+
+## The Architectural Imperative for Multi-Provider LLM Integration
+
+In production AI systems, relying on a single foundation model provider creates operational vulnerability. Model APIs experience regional latency spikes, unexpected rate limits, schema updates, and transient outages. Furthermore, no single model dominates across every technical axis: some models excel at rapid structured data extraction at minimal cost, others lead in deep programmatic reasoning, and specialized hardware providers offer ultra-low-latency inference for real-time user experiences.
+
+Transitioning from consumer web interfaces (such as ChatGPT, Claude.ai, or Gemini Advanced) to professional engineering requires orchestrating multiple model providers via code. By decoupling applications from a single backend, developers can achieve:
+1. **Redundancy and High Availability:** Seamlessly falling back to alternative frontier models during provider downtime or service degradation.
+2. **Cost and Latency Arbitrage:** Routing lightweight tasks (such as link classification or text extraction) to small, cost-effective models, while reserving compute-intensive reasoning or synthesis tasks for frontier reasoning models.
+3. **Capability Matching:** Leveraging unique vendor strengths—such as Gemini's multi-million-token context window, Claude's superior nuance and code generation, Groq's high-speed LPU inference, or OpenAI's mature tooling ecosystem.
+
+```text
++-------------------------------------------------------------------------+
+|                MULTI-PROVIDER CLIENT ROUTING ARCHITECTURE               |
++-------------------------------------------------------------------------+
+
+                             +-----------------------+
+                             |  Application Logic    |
+                             |  (Unified Prompt Payloads)
+                             +-----------------------+
+                                         |
+             +---------------------------+---------------------------+
+             |                           |                           |
+             v                           v                           v
+   +--------------------+      +--------------------+      +--------------------+
+   | Direct SDK Clients |      | OpenAI API Gateway |      | OpenRouter Gateway |
+   | (Anthropic, Google)|      | Base URL Swapping  |      | Unified Proxy API  |
+   +--------------------+      +--------------------+      +--------------------+
+             |                           |                           |
+    +--------+--------+         +--------+--------+         +--------+--------+
+    |                 |         |                 |         |                 |
+    v                 v         v                 v         v                 v
+[Claude API]    [Gemini API] [DeepSeek]       [Groq]     [100+ Models via Single]
+                                                         [Account & API Key     ]
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor App as Client Application
+    participant OpenAI as OpenAI Native Endpoint
+    participant Gemini as Google Gemini OpenAI Endpoint
+    participant Groq as Groq LPU Inference Endpoint
+    participant OpenRouter as OpenRouter Unified Gateway
+
+    App->>OpenAI: POST /v1/chat/completions (gpt-4.1-mini)
+    OpenAI-->>App: Return rapid text response (~1s)
+
+    App->>Gemini: POST /v1beta/openai/chat/completions (gemini-2.5)
+    Gemini-->>App: Return high-context completion
+
+    App->>Groq: POST /openai/v1/chat/completions (llama-3.3-70b)
+    Groq-->>App: Return ultra-high-speed streaming response (>250 tps)
+
+    App->>OpenRouter: POST /api/v1/chat/completions (anthropic/claude-sonnet)
+    OpenRouter-->>App: Unified billing routing to Anthropic infrastructure
+```
+
+---
+
+## Provider Landscape and Environment Configuration
+
+Connecting to diverse frontier models requires establishing developer accounts, acquiring API keys, and securely managing them in the application environment.
+
+### Frontier Provider Directory
+
+| Provider | Primary Frontier Models | Pricing / Top-Up Model | Key Format Identifier | Portal URL |
+| :--- | :--- | :--- | :--- | :--- |
+| **OpenAI** | GPT-4o, GPT-4o-mini, o1, o3-mini | Prepaid (\$5 minimum deposit) | `sk-proj-...` | `https://openai.com/api/` |
+| **Anthropic** | Claude 3.5 Sonnet, Claude 3.5 Haiku, Claude 3 Opus | Prepaid (\$5 minimum deposit) | `sk-ant-...` | `https://console.anthropic.com/` |
+| **Google** | Gemini 2.0 Flash, Gemini 1.5 Pro | Generous free tier / Pay-as-you-go | `AIza...` | `https://ai.google.dev/gemini-api` |
+| **DeepSeek** | DeepSeek-V3, DeepSeek-R1 | Prepaid (\$2 minimum deposit) | `sk-...` | `https://platform.deepseek.com/` |
+| **Groq** | Llama 3.3 70B, Mixtral 8x7B (on LPUs) | Free tier available / Usage-based | `gsk_...` | `https://console.groq.com/` |
+| **xAI (Grok)** | Grok 2, Grok 2 Mini | Free credits upon launch / Usage-based | `xai-...` | `https://console.x.ai/` |
+| **OpenRouter** | 100+ aggregated frontier & open models | Single deposit / Unified billing | `sk-or-...` | `https://openrouter.ai/` |
+| **Ollama (Local)** | Llama 3, Mistral, Qwen, DeepSeek | Completely free (local compute) | None required (`"ollama"`) | `http://localhost:11434` |
+
+> [!NOTE]
+> **Distinguishing Groq vs. Grok:** **Groq** (with a "q") is an AI hardware company that manufactures Language Processing Units (LPUs), custom ASICs designed specifically for high-speed sequential token generation. **Grok** (with a "k") is the frontier LLM developed by Elon Musk's xAI.
+
+### Secure Key Ingestion in Python
+
+API keys must never be hardcoded into notebooks, scripts, or committed to source control repositories. They are stored in a root `.env` file and loaded into Python's execution environment using `python-dotenv`.
+
+When modifying keys while an interactive Python kernel is running, call `load_dotenv(override=True)` to force the environment to overwrite cached values. To verify keys safely in output logs, print only a short prefix slice (e.g., `key[:8]`) rather than printing the entire secret string.
+
+```python
+import os
+from dotenv import load_dotenv
+
+# Force reload of environment variables from .env file
+load_dotenv(override=True)
+
+# Ingest all provider keys
+openai_api_key = os.getenv("OPENAI_API_KEY")
+anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+google_api_key = os.getenv("GOOGLE_API_KEY")
+deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+groq_api_key = os.getenv("GROQ_API_KEY")
+grok_api_key = os.getenv("GROK_API_KEY")
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+
+# Safe prefix verification routine
+def verify_key(provider_name: str, key_val: str | None, prefix_len: int = 4):
+    if key_val:
+        print(f"{provider_name} API Key exists and begins {key_val[:prefix_len]}")
+    else:
+        print(f"{provider_name} API Key not set (and this is optional)")
+
+verify_key("OpenAI", openai_api_key, 8)
+verify_key("Anthropic", anthropic_api_key, 7)
+verify_key("Google", google_api_key, 2)
+verify_key("DeepSeek", deepseek_api_key, 3)
+verify_key("Groq", groq_api_key, 4)
+verify_key("Grok", grok_api_key, 4)
+verify_key("OpenRouter", openrouter_api_key, 3)
+```
+
+```text
+[Expected Output Sample]
+OpenAI API Key exists and begins sk-proj-
+Anthropic API Key exists and begins sk-ant-
+Google API Key exists and begins AI
+DeepSeek API Key exists and begins sk-
+Groq API Key exists and begins gsk_
+Grok API Key exists and begins xai-
+OpenRouter API Key exists and begins sk-
+```
+
+> [!CAUTION]
+> **Unsaved `.env` Files in Cursor and VS Code:** A frequent setup mistake is adding API keys to `.env` but failing to save the document. In Cursor and VS Code, an unsaved file displays a solid white dot on its editor tab. Ensure the file is saved (`Cmd+S` / `Ctrl+S`) so changes persist to disk before executing `load_dotenv(override=True)`.
+
+---
+
+## The OpenAI SDK as a Universal Wire Protocol
+
+While providers such as Anthropic (`anthropic`) and Google (`google-genai`) publish standalone Python SDKs, maintaining separate client libraries creates dependency bloat, divergent error-handling patterns, and non-standard request schemas.
+
+To address this, most major AI infrastructure providers have adopted the OpenAI Chat Completions API format as a de facto industry wire protocol. The standard `openai.OpenAI()` client allows developers to swap the target endpoint by supplying a custom `base_url` parameter.
+
+### Initializing Unified Provider Clients
+
+```python
+from openai import OpenAI
+
+# 1. Native OpenAI client
+openai = OpenAI(api_key=openai_api_key)
+
+# 2. Base URL endpoints for OpenAI-compatible providers
+anthropic_url = "https://api.anthropic.com/v1/"
+gemini_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+deepseek_url = "https://api.deepseek.com"
+groq_url = "https://api.groq.com/openai/v1"
+grok_url = "https://api.x.ai/v1"
+openrouter_url = "https://openrouter.ai/api/v1"
+ollama_url = "http://localhost:11434/v1"
+
+# 3. Instantiate standardized OpenAI clients pointing to diverse backends
+gemini = OpenAI(api_key=google_api_key, base_url=gemini_url)
+deepseek = OpenAI(api_key=deepseek_api_key, base_url=deepseek_url)
+groq = OpenAI(api_key=groq_api_key, base_url=groq_url)
+grok = OpenAI(api_key=grok_api_key, base_url=grok_url)
+openrouter = OpenAI(api_key=openrouter_api_key, base_url=openrouter_url)
+ollama = OpenAI(api_key="ollama", base_url=ollama_url)
+```
+
+> [!TIP]
+> **OpenRouter as a Single Aggregation Gateway:** If you want access to multiple frontier models without managing six separate billing portals and credit cards, **OpenRouter** (`https://openrouter.ai/`) provides a single unified API key and unified balance. You can target Claude 3.5 Sonnet, Gemini 1.5 Pro, Llama 3.3, and GPT-4o through an OpenAI-compatible endpoint simply by changing the `model` identifier string (e.g., `model="anthropic/claude-3.5-sonnet"`).
+
+---
+
+## Multi-Model Execution and Comparative Evaluation
+
+With unified clients instantiated, identical prompt payloads can be dispatched across disparate foundation models.
+
+### System Prompt Minimalism
+
+When constructing message payloads, novice developers frequently provide boilerplate system prompts (e.g., `"You are a helpful assistant"`). Modern instruction-tuned models already default to helpful, conversational behavior. Unless a system prompt introduces domain persona constraints, behavioral guardrails, or output format requirements, omitting it saves prompt tokens without affecting output quality.
+
+```python
+from IPython.display import Markdown, display
+
+# Construct a pure user message payload without boilerplate system text
+tell_a_joke = [
+    {
+        "role": "user",
+        "content": "Tell a joke for a student on the journey to becoming an expert in LLM engineering."
+    }
+]
+```
+
+### Comparing Frontier Generations: GPT-4.1-mini vs. Claude Sonnet 4.5
+
+```python
+# Call OpenAI GPT-4.1-mini (High-speed, low-cost utility model)
+response_openai = openai.chat.completions.create(
+    model="gpt-4.1-mini",
+    messages=tell_a_joke
+)
+display(Markdown(response_openai.choices[0].message.content))
+```
+
+```text
+[Expected Output Sample: GPT-4.1-mini - Execution Time: ~1.0s]
+Sure! Here's a joke for an aspiring LLM engineer:
+
+Why did the LLM engineer bring a ladder to the data center?
+Because they wanted to reach the next level of training!
+```
+
+```python
+# Call Anthropic Claude Sonnet 4.5 via compatible proxy or dedicated client
+response_claude = anthropic.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=tell_a_joke
+)
+display(Markdown(response_claude.choices[0].message.content))
+```
+
+```text
+[Expected Output Sample: Claude Sonnet 4.5 - Execution Time: ~26.9s]
+A junior LLM engineer walks into a bar and asks the bartender, "Can you help me? I've been trying to reduce my model's hallucinations."
+
+The bartender replies, "Sure! That'll be $47 in API costs."
+
+The engineer says, "Wait, I only asked one question!"
+
+The bartender responds, "I know, but you set temperature to 1.5 and your system prompt was 3000 tokens of 'You are a helpful bartender assistant who provides detailed, comprehensive responses...'"
+
+Bonus wisdom: You'll know you're becoming an expert when you stop asking "Can we fine-tune this?" and start asking "Should we fine-tune this?"
+(Usually the answer is no. Prompt engineering + RAG solves 80% of what people think needs fine-tuning!)
+```
+
+### Analysis of Model Behaviors
+
+1. **Latency and Execution Speed:** `gpt-4.1-mini` completed inference in approximately 1.0 second, delivering a straightforward, concise punchline. Claude Sonnet 4.5—operating as a hybrid reasoning and chat model—took roughly 26.9 seconds to plan, write, and refine an elaborate multi-character technical narrative.
+2. **Contextual Wit vs. Factuality:** While `gpt-4.1-mini` produced a generic wordplay joke, Claude exhibited deep technical humor targeting specific real-world engineering pitfalls: elevated temperature hyperparameters, bloated system prompts, and billing surprises.
+3. **The Core LLM Engineering Rule:** Claude's concluding pearl of wisdom captures a fundamental tenet of modern AI architecture:
+   > *"Stop asking 'Can we fine-tune this?' and start asking 'Should we fine-tune this?' Prompt engineering and RAG solve 80% of what people think needs fine-tuning."*
+
+---
+
+## Direct Provider Integration vs. API Gateway Aggregation
+
+| Architectural Approach | Core Strengths | Operational Drawbacks | Ideal Application Scope |
+| :--- | :--- | :--- | :--- |
+| **Direct Provider APIs** (OpenAI, Anthropic, Google) | Lowest possible latency, access to newest proprietary features, direct SLA guarantees | Managing multiple billing dashboards, disparate invoices, separate API keys | Enterprise products with committed volume agreements on specific foundation models |
+| **OpenRouter Unified Gateway** | Single account, single credit card balance, access to 100+ models, instant model switching | Minimal intermediary routing latency (~20-50ms), reliance on third-party aggregator | Rapid prototyping, benchmark evaluations, multi-model evaluation pipelines |
+| **Local Inference via Ollama** | Completely free, zero data egress, offline execution, zero privacy concerns | Limited to hardware compute (Apple Silicon / GPU RAM), lower reasoning ceiling | Privacy-sensitive local data processing, unit testing, offline environments |
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: Why is relying on a single foundation model provider an architectural anti-pattern in production AI engineering?</b></summary>
+<br>
+<b>Answer:</b> Single-provider reliance introduces single points of failure (outages, rate limits, latency spikes), locks the team into one vendor's pricing structure, and prevents developers from selecting the optimal model for specific subtasks (such as pairing fast, cheap models for filtering with high-reasoning frontier models for synthesis).
+</details>
+
+<details>
+<summary><b>Question 2: How does the OpenAI Python SDK allow developers to query models from Google, DeepSeek, or Groq without installing separate vendor libraries?</b></summary>
+<br>
+<b>Answer:</b> The OpenAI SDK accepts a custom `base_url` parameter upon instantiation. Because Google, DeepSeek, Groq, and others implement OpenAI-compatible HTTP endpoints that mirror the Chat Completions schema, passing the provider's base URL and API key enables seamless model querying through the standard OpenAI client.
+</details>
+
+<details>
+<summary><b>Question 3: What is the functional difference between Groq and Grok?</b></summary>
+<br>
+<b>Answer:</b> Groq (with a "q") is an AI inference chipmaker specializing in ultra-fast hardware called Language Processing Units (LPUs). Grok (with a "k") is the generative foundation model family developed by Elon Musk's xAI.
+</details>
+
+<details>
+<summary><b>Question 4: Why is a boilerplate system prompt like "You are a helpful assistant" generally unnecessary?</b></summary>
+<br>
+<b>Answer:</b> Modern instruction-tuned models are pre-trained and aligned using RLHF to act as helpful conversational assistants by default. Including a generic boilerplate prompt consumes input tokens and adds billing cost without providing any meaningful steering or behavioral differentiation.
+</details>
+
+<details>
+<summary><b>Question 5: According to Claude's technical humor in the lecture, what architectural approach solves approximately 80% of enterprise problems before fine-tuning should even be considered?</b></summary>
+<br>
+<b>Answer:</b> Prompt engineering (context engineering) paired with Retrieval-Augmented Generation (RAG). Teams should first optimize in-context retrieval and instructions before incurring the computational complexity, dataset curation overhead, and maintenance burden of fine-tuning.
+</details>
+
+---
+
+# Testing Reasoning Models: Inference-Time Scaling and Spatial Logic Puzzles
+
+## The Two Dimensions of Compute Scaling: Training-Time vs. Inference-Time
+
+In early generations of large language models, performance gains were driven almost exclusively by **training-time scaling**: building larger neural architectures, training them on ever-larger token datasets, and spending millions of GPU hours during pre-training. Under this paradigm, if an engineer needed higher accuracy or deeper analytical reasoning, the only solution was to upgrade to a larger model (e.g., migrating from a 7-billion parameter model to a 70-billion or frontier model).
+
+Modern AI engineering introduces a second, orthogonal scaling dimension: **inference-time scaling** (also known as runtime scaling). Instead of fixing the amount of compute spent per output token, inference-time scaling allows the model to dynamically generate internal "thinking" or reasoning tokens—often called hidden chain-of-thought traces—before committing to its final visible answer.
+
+```text
++-------------------------------------------------------------------------+
+|                  THE TWO DIMENSIONS OF COMPUTE SCALING                  |
++-------------------------------------------------------------------------+
+
+  TRAINING-TIME SCALING                    INFERENCE-TIME SCALING
+  (Pre-computation during training)        (Dynamic compute at runtime)
+  
+       +-----------------------+                +-----------------------+
+       |   gpt-5 (Full Base)   |                | reasoning_effort="high"|
+       +-----------------------+                +-----------------------+
+                   ^                                        ^
+                   | Parameter Size                         | Reasoning Tokens
+       +-----------------------+                +-----------------------+
+       |      gpt-5-mini       |                | reasoning_effort="med" |
+       +-----------------------+                +-----------------------+
+                   ^                                        ^
+                   | Parameter Size                         | Reasoning Tokens
+       +-----------------------+                +-----------------------+
+       |      gpt-5-nano       |                | reasoning_effort="low" |
+       +-----------------------+                +-----------------------+
+                                                            ^
+                                                            | Minimal Tokens
+                                                +-----------------------+
+                                                | reasoning_effort="min" |
+                                                +-----------------------+
+```
+
+```mermaid
+flowchart LR
+    subgraph Standard_Inference["Standard Autoregressive Generation"]
+        A["Input Prompt"] --> B["Direct Next-Token Prediction"]
+        B --> C["Immediate Output (High Speed, Zero Deliberation)"]
+    end
+
+    subgraph Reasoning_Inference["Inference-Time Scaling (Reasoning)"]
+        D["Input Prompt"] --> E["Generate Internal Reasoning Tokens"]
+        E --> F["Hypothesize & Check Assumptions"]
+        F --> G["Backtrack & Correct Misconceptions"]
+        G --> H["Synthesize Final Verified Response"]
+    end
+
+    classDef standard fill:#f1f5f9,stroke:#64748b,stroke-width:1px;
+    classDef reasoning fill:#eff6ff,stroke:#2563eb,stroke-width:1px;
+    class Standard_Inference standard;
+    class Reasoning_Inference reasoning;
+```
+
+---
+
+## The reasoning_effort API Parameter
+
+With the introduction of frontier reasoning models (such as OpenAI's `o1`, `o3-mini`, and `gpt-5` series), developers can programmatically control the budget of internal thinking tokens via the `reasoning_effort` parameter in the Chat Completions API.
+
+### Supported Reasoning Levels
+
+OpenAI's API supports four levels of reasoning effort:
+- `"minimal"`: Instructs the model to emit the fewest internal reasoning tokens possible. Latency is lowest, behaving closest to a standard chat model, but subtle trick questions may fail.
+- `"low"`: Allocates a modest thinking budget suitable for basic logic, arithmetic validation, and straightforward edge-case resolution.
+- `"medium"`: Balanced deliberation for multi-step math, programmatic debugging, and counterintuitive problems.
+- `"high"`: Maximum token allocation where the model methodically checks edge cases, challenges ambiguous assumptions, and performs comprehensive self-correction before outputting text.
+
+```python
+import os
+from openai import OpenAI
+from IPython.display import Markdown, display
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Define an input puzzle requiring probabilistic reasoning
+easy_puzzle = [
+    {
+        "role": "user",
+        "content": (
+            "You toss 2 coins. One of them is heads. "
+            "What's the probability the other is tails? "
+            "Answer with the probability only."
+        )
+    }
+]
+```
+
+---
+
+## Empirical Evaluation: The Two Coins Conditional Probability Puzzle
+
+To demonstrate the concrete impact of both scaling axes, consider a classic probability problem that human intuition frequently gets wrong:
+
+> *"You toss 2 coins. One of them is heads. What is the probability that the other coin is tails? Answer with the probability only."*
+
+### Why the Correct Answer is 2/3
+
+Most people incorrectly assume the answer is $1/2$ by treating the two coins as independent events after the fact. However, because the problem states that *at least one* coin is heads without specifying *which* coin (first or second), the sample space is conditionally restricted:
+
+1. **Unconditioned Sample Space:** When tossing two fair coins, four equally likely outcomes exist:
+   $$\text{Sample Space} = \{HH, HT, TH, TT\}$$
+2. **Applying the Condition:** The condition "one of them is heads" eliminates the outcome $\{TT\}$, leaving three equally likely possibilities:
+   $$\text{Restricted Sample Space} = \{HH, HT, TH\}$$
+3. **Evaluating the Target Condition:** In the remaining set, how many outcomes contain a tails?
+   - $HT$: One is heads, the other is tails.
+   - $TH$: One is heads, the other is tails.
+   - $HH$: Both are heads.
+   Two of the three remaining outcomes satisfy the condition. Therefore, the probability that the other coin is tails is exactly **$2/3$**.
+
+### Testing the Dual Scaling Axes
+
+```python
+# Test 1: Smallest model (gpt-5-nano) with minimal reasoning
+response_min = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=easy_puzzle,
+    reasoning_effort="minimal"
+)
+print("GPT-5-nano (minimal):", response_min.choices[0].message.content)
+```
+
+```text
+[Expected Output Sample]
+GPT-5-nano (minimal): 1/3
+```
+*Result:* Failed. The smallest model with minimal reasoning tokens failed to decompose the conditional sample space, guessing $1/3$ or $1/2$ in approximately 0.8 seconds.
+
+```python
+# Test 2: Inference-Time Scaling — Same model (gpt-5-nano) with low reasoning
+response_low = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=easy_puzzle,
+    reasoning_effort="low"
+)
+print("GPT-5-nano (low reasoning):", response_low.choices[0].message.content)
+```
+
+```text
+[Expected Output Sample]
+GPT-5-nano (low reasoning): 2/3
+```
+*Result:* Correct. Keeping the model size identical (`gpt-5-nano`) but dialing up `reasoning_effort` from `"minimal"` to `"low"` enabled the model to internally enumerate outcomes and arrive at the mathematically rigorous answer of $2/3$ in 1.7 seconds.
+
+```python
+# Test 3: Training-Time Scaling — Larger model (gpt-5-mini) with minimal reasoning
+response_mini = client.chat.completions.create(
+    model="gpt-5-mini",
+    messages=easy_puzzle,
+    reasoning_effort="minimal"
+)
+print("GPT-5-mini (minimal):", response_mini.choices[0].message.content)
+```
+
+```text
+[Expected Output Sample]
+GPT-5-mini (minimal): 2/3
+```
+*Result:* Correct. Increasing parameter scale during pre-training (`gpt-5-mini`) allowed the model to answer correctly even when constrained to minimal reasoning effort.
+
+> [!IMPORTANT]
+> **The Core Engineering Equivalence:** You can reach problem-solving milestones either through **training-time scaling** (paying for a larger parameter model) or through **inference-time scaling** (allocating more reasoning tokens to a smaller model). In production architectures, choosing a smaller model with targeted reasoning effort frequently delivers identical accuracy at lower latency and cost compared to unguided flagship models.
+
+---
+
+## Challenging Frontier Intelligence: The Pushkin Bookworm Spatial Puzzle
+
+While probability puzzles test mathematical conditioning, spatial orientation brainteasers test whether a model's internal representations can simulate physical 3D objects and spatial boundaries.
+
+### The Problem Statement
+
+```python
+hard_puzzle_text = (
+    "On a bookshelf, two volumes of Pushkin stand side by side: the first and the second.\\n"
+    "The pages of each volume together have a thickness of 2 cm, and each cover is 2 mm thick.\\n"
+    "A worm has gnawed (perpendicular to the pages) from the first page of the first volume "
+    "to the last page of the second volume.\\n"
+    "What distance did it gnaw through?"
+)
+
+hard_puzzle = [{"role": "user", "content": hard_puzzle_text}]
+```
+
+### The Spatial Representation Trap
+
+Most humans and naive language models perform simple arithmetic on the stated numbers:
+$$\text{Pages of Vol 1 (20 mm)} + \text{Cover 1 (2 mm)} + \text{Cover 2 (2 mm)} + \text{Pages of Vol 2 (20 mm)} = 44\text{ mm (or } 4.3\text{ to } 4.4\text{ cm)}$$
+
+However, books standing on a bookshelf follow a specific physical geometry:
+
+```text
++-------------------------------------------------------------------------+
+|                  BOOKSHELF SPATIAL GEOMETRY (TOP VIEW)                  |
++-------------------------------------------------------------------------+
+
+            VOLUME 1 (Left Book)               VOLUME 2 (Right Book)
+       +------------------------------+   +------------------------------+
+       | Back Cover (2 mm)            |   | Front Cover (2 mm)           |
+       |                              |   |                              |
+       | Pages (20 mm)                |   | Pages (20 mm)                |
+       |                              |   |                              |
+       | Front Cover (2 mm)           |   | Back Cover (2 mm)            |
+       +------------------------------+   +------------------------------+
+                     |                                  |
+                     | FIRST PAGE                       | LAST PAGE
+                     v                                  v
+                  [Page 1]     <---------------->   [Last Page]
+                         |                              |
+                         +--------> WORM PATH <---------+
+                         Only penetrates:
+                         - Front Cover of Volume 1 (2 mm)
+                         - Front Cover of Volume 2 (2 mm)
+                         Total distance = 4 mm (0.4 cm)!
+```
+
+When standard books stand on a shelf side-by-side with their spines facing out:
+1. **Volume 1** is on the left. In left-to-right languages, a book's front cover and Page 1 are on the **right side** of Volume 1, directly touching Volume 2.
+2. **Volume 2** is on the right. Its front cover and Page 1 are on the left side, directly touching Volume 1. Its back cover and last page are on the far right.
+3. Therefore, the first page of Volume 1 and the last page of Volume 2 are separated only by the **front cover of Volume 1** and the **front cover of Volume 2**!
+4. The worm never passes through the pages of Volume 1 or the pages of Volume 2. The physical distance traveled is merely:
+   $$2\text{ mm} + 2\text{ mm} = 4\text{ mm (or } 0.4\text{ cm)}$$
+
+### Benchmarking Models on Spatial Emulation
+
+```python
+# Execute with lightweight model
+response_nano_hard = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=hard_puzzle,
+    reasoning_effort="minimal"
+)
+display(Markdown(response_nano_hard.choices[0].message.content))
+```
+
+```text
+[Expected Output Sample]
+GPT-5-nano (minimal):
+We can compute the distance traversed through material from start to end along the straight line...
+Total distance = 19 mm (Vol 1 pages) + 2 mm (Vol 1 cover) + 2 mm (Vol 2 cover) + 20 mm (Vol 2 pages) = 43 mm.
+Answer: 4.3 cm.
+```
+*Result:* Failed. The non-reasoning small model jumped directly to surface-level token associations without mentally visualizing the physical orientation of book covers on a shelf.
+
+### Multi-Model Frontier Showdown
+
+To determine whether runtime deliberation can overcome this spatial illusion, the puzzle is submitted simultaneously to the world's leading frontier architectures:
+- **Claude Sonnet 4.5** (`claude-sonnet-4-5-20250929`)
+- **OpenAI GPT-5** (`gpt-5`)
+- **Google Gemini 2.5 Pro** (`gemini-2.5-pro`)
+
+```python
+# Dispatching hard spatial puzzle to premier frontier models
+response_claude = anthropic.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=hard_puzzle
+)
+
+response_gpt5 = openai.chat.completions.create(
+    model="gpt-5",
+    messages=hard_puzzle
+)
+
+response_gemini = gemini.chat.completions.create(
+    model="gemini-2.5-pro",
+    messages=hard_puzzle
+)
+```
+
+> [!CAUTION]
+> **Reasoning Latency and Hardware Timeouts:** Complex reasoning prompts requiring physical modeling can consume hundreds or thousands of internal tokens. During benchmark runs, models may deliberate for 30 to 120 seconds before emitting the first output token. Ensure client HTTP timeouts are set to at least 180 seconds when invoking frontier models with deep reasoning enabled.
+
+---
+
+## Comparison of Scaling Modalities
+
+| Feature / Metric | Training-Time Scaling (Model Size) | Inference-Time Scaling (`reasoning_effort`) |
+| :--- | :--- | :--- |
+| **Execution Point** | Offline pre-training and parameter sizing | Online dynamic generation per request |
+| **Cost Profile** | Higher baseline cost per input/output token | Variable cost depending on reasoning tokens emitted |
+| **Latency Profile** | Constant, predictable per token generated | Variable latency (seconds to minutes for hard problems) |
+| **Strengths** | Fast factual retrieval, language translation, syntax | Logic puzzles, formal mathematical proofs, debugging code |
+| **Key Hyperparameter** | Model identifier string (e.g., `nano` vs `mini` vs `pro`) | `reasoning_effort="minimal" \| "low" \| "medium" \| "high"` |
+
+---
+
+## Review Quiz
+
+<details>
+<summary><b>Question 1: What is the fundamental difference between training-time scaling and inference-time scaling?</b></summary>
+<br>
+<b>Answer:</b> Training-time scaling improves model intelligence by pre-training larger parameter architectures on larger datasets before deployment. Inference-time scaling dynamically allocates additional computational effort at runtime by generating internal chain-of-thought reasoning tokens to evaluate, verify, and refine hypotheses before returning the final response.
+</details>
+
+<details>
+<summary><b>Question 2: What are the four valid values for the `reasoning_effort` parameter in OpenAI's Chat Completions API?</b></summary>
+<br>
+<b>Answer:</b> The four supported values are "minimal", "low", "medium", and "high".
+</details>
+
+<details>
+<summary><b>Question 3: Why does `reasoning_effort="low"` enable `gpt-5-nano` to correctly solve the two-coins probability puzzle when `"minimal"` fails?</b></summary>
+<br>
+<b>Answer:</b> With minimal reasoning, the model relies on immediate surface token associations, leading to the common misconception that the answer is 1/2 or guessing 1/3. With low reasoning effort, the model generates internal chain-of-thought tokens that explicitly enumerate the conditional sample space ({HH, HT, TH}), correctly deriving 2/3.
+</details>
+
+<details>
+<summary><b>Question 4: What spatial misunderstanding causes models without reasoning to calculate 4.3 cm or 4.4 cm for the Pushkin bookworm puzzle?</b></summary>
+<br>
+<b>Answer:</b> They fail to account for the physical orientation of books standing on a shelf. When books are shelved side-by-side with spines facing out, Volume 1's front cover (and first page) is on its right edge, touching Volume 2's front cover. The worm travels only through the two touching covers (2 mm + 2 mm = 4 mm), never traversing the interior pages.
+</details>
+
+<details>
+<summary><b>Question 5: Why is setting generous client HTTP timeout values essential when deploying reasoning models in production?</b></summary>
+<br>
+<b>Answer:</b> Reasoning models generate hundreds or thousands of internal thinking tokens to analyze complex prompts before emitting visible tokens. Under medium or high reasoning effort, time-to-first-token (TTFT) can easily exceed 30 to 60 seconds; without sufficient HTTP timeout thresholds (e.g., 120-180 seconds), client applications will raise premature connection drop errors.
 </details>
