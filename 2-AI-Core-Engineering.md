@@ -34,6 +34,11 @@
 - [Building Conversational Interfaces with Gradio ChatInterface and Message History](#building-conversational-interfaces-with-gradio-chatinterface-and-message-history)
 - [Building an Airline AI Assistant with Tool Calling in OpenAI and Gradio](#building-an-airline-ai-assistant-with-tool-calling-in-openai-and-gradio)
 - [Handling Multiple and Sequential Tool Calls in Agentic Workflows](#handling-multiple-and-sequential-tool-calls-in-agentic-workflows)
+- [Foundations of Agentic AI and Multi-Tool Workflows](#foundations-of-agentic-ai-and-multi-tool-workflows)
+- [Gradio Architecture: Compiling Python to Modern Web Applications](#gradio-architecture-compiling-python-to-modern-web-applications)
+- [Multimodal App Architecture: Integrating DALL-E 3, Text-to-Speech, and Gradio Blocks](#multimodal-app-architecture-integrating-dall-e-3-text-to-speech-and-gradio-blocks)
+- [Deploying and Running the Complete Multimodal AI Airline Assistant](#deploying-and-running-the-complete-multimodal-ai-airline-assistant)
+- [Benchmarking Frontier and Open-Source Models via OpenRouter: Vector SVG Generation](#benchmarking-frontier-and-open-source-models-via-openrouter-vector-svg-generation)
 
 ---
 
@@ -10521,4 +10526,980 @@ Final Assistant Response:
 <summary><b>Question 5: What is the purpose of messages.extend(tool_responses) versus messages.append(tool_responses)?</b></summary>
 <br>
 <b>Answer:</b> When multiple tools are executed in parallel, `handle_tool_calls` returns a list of dictionary messages. Using `.extend()` unpacks each individual tool result dictionary into the parent `messages` list, maintaining the flat list-of-dicts structure expected by the API.
+</details>
+
+
+---
+
+# Foundations of Agentic AI and Multi-Tool Workflows
+
+As artificial intelligence systems mature, software architectures are moving beyond single-turn prompt-and-response interactions. While early conversational applications were limited to answering user queries using internal training weights, modern systems orchestrate multi-step workflows, interact with external environments, and maintain state across iterative cycles.
+
+Understanding the engineering principles behind "Agentic AI" begins by stripping away marketing hype and grounding agent architectures in concrete computer science mechanisms: next-token generation, structured output parsing, and iterative control loops.
+
+```text
+DETERMINISTIC PIPELINE:
+[Input] ----> [Static Function A] ----> [Static Function B] ----> [Output]
+(Rigid, hard-coded execution paths with zero runtime branching autonomy)
+
+AGENTIC CONTROL LOOP:
+              +---------------------------------------+
+              |                                       |
+              v                                       |
+[User Goal] ----> [LLM Evaluates State] ----> [Chooses Action / Tool]
+                         |                            |
+                         | (Goal Achieved)            | (Executes Query/API)
+                         v                            v
+                  [Final Response] <----------- [Observation / Result]
+```
+
+---
+
+## Defining Agentic AI: The Two Prevailing Models
+
+In industry discussions, the term "agent" is frequently overloaded. Historically, chaining multiple LLM API calls together was informally labeled an "agentic workflow." Today, two distinct, rigorous technical definitions have emerged.
+
+### Definition 1: LLM-Governed Dynamic Workflows
+
+In this paradigm, the language model dictates the application's runtime control flow. Rather than following hardcoded branching statements (`if/else`), the application delegates decision-making to the model's generated tokens.
+
+Because language models are fundamentally next-token predictors, "autonomy" is implemented by interpreting generated tokens as control instructions. The runtime parses these tokens, determines whether an action is needed, and decides which subsystem to invoke next.
+
+### Definition 2: Goal-Oriented Iterative Tool Loops
+
+In this operational paradigm (exemplified by autonomous coding engines and task assistants), an agent executes tools inside an iterative feedback loop to achieve an overarching goal. The model inspects the current environment, emits a tool call, observes the execution result, and repeats the process until the task is complete.
+
+```mermaid
+flowchart TD
+    A["User Submits High-Level Goal"] --> B["LLM Evaluates Current State & Context"]
+    B --> C{"Decision: Tool Call Required?"}
+    C -- "Yes" --> D["Emit Structured Tool Payload (JSON)"]
+    D --> E["Host Environment Executes Tool"]
+    E --> F["Return Tool Output as Observation"]
+    F --> B
+    C -- "No" --> G["Synthesize Grounded Final Response"]
+    G --> H["Deliver Solution to User"]
+```
+
+### Hallmark Features of Agentic Systems
+
+Practical agent implementations generally share several core capabilities:
+- **Memory and State Persistence:** Maintaining conversational history, intermediate execution logs, and entity states across multiple execution turns.
+- **Planning and Decomposition:** Breaking down complex user objectives into sequential or parallel sub-actions.
+- **Autonomy in Execution:** Dynamically deciding whether further investigation is needed or if sufficient data exists to answer the user.
+- **Action Execution via Tools:** Calling external APIs, querying databases, running shell scripts, or updating local disk state.
+
+> [!NOTE]
+> **Tools vs. Structured JSON Outputs:** Generating function calls and emitting structured JSON schemas are architecturally equivalent. Tool calling is simply a vendor-standardized convention for generating structured JSON parameters that client applications map to local functions.
+
+---
+
+## Airline Assistant Case Study: Evolution and Anti-Hallucination Guardrails
+
+To explore agentic principles hands-on, consider the evolution of a customer support assistant for a fictional airline ("Flighty"). The system must provide accurate flight quotes by querying a local database without fabricating schedules or prices.
+
+### Anti-Hallucination via Strict System Prompting
+
+LLMs are prone to hallucinating data when specific domain records are missing from their context. Strict system instructions enforce behavioral boundaries, instructing the model to declare when data is unavailable rather than guessing.
+
+```python
+import sqlite3
+import openai
+
+# Specify standard engine parameters
+MODEL = "gpt-4o-mini"
+DB_PATH = "prices.db"
+
+# System prompt enforcing strict anti-hallucination boundaries
+system_message = (
+    "You are a helpful customer service assistant for an airline called Flighty. "
+    "Give concise, professional answers. Always use the provided database tools to look up "
+    "ticket prices. If a requested date or route is not available in the database, explicitly state "
+    "that pricing data is not yet available; under no circumstances should you invent or estimate prices."
+)
+```
+
+### Database Tool Definition
+
+The assistant queries a local SQLite database (`prices.db`) populated with route pricing:
+
+```python
+def get_ticket_price(city: str) -> str:
+    """
+    Looks up the flight ticket price for a specified destination in the SQLite database.
+    """
+    print(f"DATABASE TOOL CALLED: Getting ticket price for {city}", flush=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT price FROM prices WHERE city = ?", (city.lower(),))
+        record = cursor.fetchone()
+        if record:
+            return f"Ticket price to {city} is ${record[0]}"
+        return f"No pricing data currently available for {city}."
+```
+
+### Declaring the JSON Tool Schema
+
+The model receives the tool signature as a declarative JSON schema, defining the expected arguments and types:
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ticket_price",
+            "description": "Retrieves the current flight ticket price for a given destination city.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination_city": {
+                        "type": "string",
+                        "description": "The destination city name (e.g., London, Paris, Tokyo)."
+                    }
+                },
+                "required": ["destination_city"]
+            }
+        }
+    }
+]
+```
+
+---
+
+## Tool Execution Loop Mechanics
+
+When the LLM encounters a query requiring external data, it suspends text generation and returns a message with `finish_reason == "tool_calls"`. The host application must execute the requested function and return the observation back to the model.
+
+```python
+import json
+
+def handle_tool_calls(assistant_message):
+    """
+    Parses tool calls from the assistant message, executes the corresponding
+    Python functions, and returns a list of tool-role response dictionaries.
+    """
+    responses = []
+    for tool_call in assistant_message.tool_calls:
+        if tool_call.function.name == "get_ticket_price":
+            arguments = json.loads(tool_call.function.arguments)
+            city = arguments.get("destination_city")
+            price_result = get_ticket_price(city)
+            
+            responses.append({
+                "role": "tool",
+                "content": price_result,
+                "tool_call_id": tool_call.id
+            })
+    return responses
+
+def chat(message, history):
+    # Sanitize and format conversation history
+    cleaned_history = [{"role": h["role"], "content": h["content"]} for h in history]
+    messages = [{"role": "system", "content": system_message}] + cleaned_history + [{"role": "user", "content": message}]
+    
+    # Request completion with tool definitions enabled
+    response = openai.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=tools
+    )
+    
+    # Execute loop while the model requires further tool observations
+    while response.choices[0].finish_reason == "tool_calls":
+        message_obj = response.choices[0].message
+        tool_responses = handle_tool_calls(message_obj)
+        
+        messages.append(message_obj)
+        messages.extend(tool_responses)
+        
+        response = openai.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=tools
+        )
+        
+    return response.choices[0].message.content
+```
+
+### Expected Output Sample
+
+```text
+User: "What is the ticket price from New York to London on Dec 1, 2025?"
+Assistant: "I'm sorry, but ticket prices for December 2025 are not yet available."
+
+User: "I'd like to travel to London."
+DATABASE TOOL CALLED: Getting ticket price for London
+Assistant: "The return ticket price to London is $799.00. How can I assist you further?"
+```
+
+---
+
+## Architectural Comparison: Pipeline Strategies
+
+| Architecture Pattern | Control Mechanism | Predictability & Determinism | Flexibility | Debugging Complexity |
+| :--- | :--- | :--- | :--- | :--- |
+| **Deterministic Script** | Static Python Code (`if/elif/else`) | 100% deterministic; strict logic | Rigid; cannot adapt to ambiguous input | Low; standard step-through debuggers |
+| **Chained LLM Pipeline** | Predefined sequential prompts | High; fixed sequence of model calls | Moderate; handles text variations within steps | Medium; prompt cascading errors |
+| **Autonomous Agent Loop** | Model tokens dictate branching | Dynamic; variable steps per user input | High; dynamically selects tools as needed | High; non-deterministic execution paths |
+
+> [!IMPORTANT]
+> **Grounding the Mental Model:** Never treat agents as thinking entities. They are token predictors wired to an execution loop that parses structured outputs into system actions.
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: What are the two prevailing definitions of an "AI Agent" in modern engineering?</b></summary>
+<br>
+<b>Answer:</b> The first definition describes an LLM-controlled workflow where the model's generated tokens dynamically dictate runtime branching and decision-making. The second definition describes a goal-oriented loop where an LLM repeatedly invokes tools, inspects observations, and refines actions until a target objective is completed.
+</details>
+
+<details>
+<summary><b>Question 2: Why are LLM tool calling and structured JSON output generation considered technically equivalent?</b></summary>
+<br>
+<b>Answer:</b> Under the hood, modern tool calling does not execute native code inside the neural network. The model simply emits a structured JSON payload conforming to an agreed-upon schema (e.g., function name and arguments), which the external host application parses and runs locally.
+</details>
+
+<details>
+<summary><b>Question 3: How does strict system prompting prevent an AI assistant from hallucinating flight prices?</b></summary>
+<br>
+<b>Answer:</b> By establishing explicit negative constraints (e.g., "If pricing or date data is not found in the database, state that it is unavailable and never estimate"), the model's likelihood distribution shifts toward admitting missing data rather than predicting plausibly sounding but false numbers.
+</details>
+
+<details>
+<summary><b>Question 4: What is the purpose of the `while response.choices[0].finish_reason == "tool_calls"` loop?</b></summary>
+<br>
+<b>Answer:</b> The loop allows the assistant to handle multi-step reasoning. If a task requires multiple tool calls (e.g., checking prices for two destinations sequentially or checking a schedule after verifying a price), the orchestrator can iteratively execute each call and return the observations until the model determines it has sufficient information to reply with text.
+</details>
+
+---
+
+# Gradio Architecture: Compiling Python to Modern Web Applications
+
+Interactive user interfaces are essential for validating AI prototypes with stakeholders. Gradio has become an industry standard for machine learning prototyping because it allows developers to generate complete web frontends directly from Python scripts.
+
+While the syntax appears straightforward (`gr.ChatInterface(...).launch()`), understanding how Gradio compiles Python representations into client-server web applications is critical when transitioning from internal proof-of-concept prototypes to scalable production services.
+
+```text
++---------------------------------------------------------------------------------+
+|                                GRADIO ENGINE                                    |
+|                                                                                 |
+|  1. PYTHON DECLARATION           2. ASGI WEB SERVER          3. FRONTEND UI     |
+|  +---------------------+         +------------------+        +---------------+  |
+|  | gr.Textbox(...)     | ------> | Starlette Server | -----> | Svelte / JS   |  |
+|  | gr.Chatbot(...)     | Config  | (FastAPI Core)   | Build  | SPA in Browser|  |
+|  +---------------------+         +------------------+        +---------------+  |
+|            |                               |                        |           |
+|            | Callbacks                     | Routes (/api/chat)     | DOM Clicks|
+|            v                               v                        v           |
+|     [ chat(history) ] <------------- [ POST /chat ] <---------- [ Submit ]      |
++---------------------------------------------------------------------------------+
+```
+
+---
+
+## The Three-Pillar Architecture of Gradio
+
+Gradio operates on a three-tier design that bridges declarative Python definitions with modern single-page web applications.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Client Browser
+    participant Svelte as Svelte Single-Page App
+    participant Starlette as Starlette ASGI Server (Port 7860+)
+    participant PyRuntime as Python Execution Runtime
+
+    User->>Starlette: HTTP GET /
+    Starlette-->>User: Returns Compiled Svelte HTML/CSS/JS Assets
+    User->>Svelte: Types message and clicks "Submit"
+    Svelte->>Starlette: POST /api/chat { "history": [...] }
+    Starlette->>PyRuntime: Invokes registered chat(history) callback
+    PyRuntime->>PyRuntime: Executes LLM query & tool calls
+    PyRuntime-->>Starlette: Returns (updated_history, audio_bytes, image_bytes)
+    Starlette-->>Svelte: HTTP 200 OK with JSON response payload
+    Svelte-->>User: Reactively updates Chatbot, Audio Player, & Image Box
+```
+
+### Pillar 1: Frontend UI Compilation via Svelte
+
+When Python code declares UI components (such as `gr.Textbox`, `gr.Dropdown`, or `gr.ChatInterface`), Gradio does not render raw server-side HTML strings. Instead, it generates a client-side Single Page Application (SPA) compiled using **Svelte**.
+
+Svelte compiles components into compact, reactive JavaScript that runs directly in the user's browser. In development environments like Jupyter Notebooks or Cursor, the frontend is rendered seamlessly inside an embedded output `<iframe>`.
+
+### Pillar 2: Starlette ASGI Web Server
+
+When `launch()` is executed, Gradio spins up an asynchronous web server built on top of **Starlette** (the high-performance ASGI framework that powers FastAPI):
+- **Port Hunting Behavior:** The server attempts to bind to default port `7860`. If port 7860 is occupied by another running application, Gradio automatically increments to the next available port (`7861`, `7862`, etc.).
+- **Static and WebSocket Serving:** The Starlette server serves the compiled Svelte static assets and manages real-time HTTP POST and WebSocket connections for streaming responses.
+
+### Pillar 3: Dynamic Route Creation and Event Binding
+
+For every callback function connected to a UI event (such as `message.submit(...)` or `button.click(...)`), the Starlette server automatically registers an internal API endpoint. When the user interacts with the UI in their browser:
+1. The Svelte frontend triggers an asynchronous fetch request to the corresponding Starlette backend route.
+2. The server passes the deserialized arguments into the user's Python callback.
+3. The returned Python objects are serialized into JSON or binary blobs and sent back to the browser.
+4. Svelte's reactive bindings immediately update the corresponding visual components in the DOM.
+
+---
+
+## Inspecting the Compiled Frontend
+
+Developers can verify this architecture directly by inspecting the running application:
+1. Launch any Gradio application in a notebook or terminal.
+2. Open the reported localhost address (e.g., `http://127.0.0.1:7860`) in a web browser.
+3. View Page Source (`Ctrl+U` or `Cmd+Option+U`): Notice the minimal root HTML containing an `<iframe>` and JavaScript loader scripts referencing Svelte bundles.
+
+```bash
+# Verify the active Starlette listening port from the command line
+lsof -i :7860
+```
+
+### Expected Output Sample
+
+```text
+COMMAND   PID    USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+python3 45892 pushkar    7u  IPv4 0x...       0t0  TCP localhost:7860 (LISTEN)
+```
+
+---
+
+## Architectural Comparison: Prototyping Frameworks
+
+| Feature / Metric | Gradio | Streamlit | Full-Stack Custom (FastAPI + React) |
+| :--- | :--- | :--- | :--- |
+| **Primary Focus** | Machine learning, multimodal chat, AI demos | Data dashboards, internal analytics | Enterprise production web apps |
+| **Execution Model** | Event-driven callbacks; selective re-rendering | Full script re-execution on every input | Complete client/server decoupling |
+| **Frontend Engine** | Compiled Svelte SPA | Custom React components | Any modern framework (Next.js, Vue) |
+| **Underlying Web Server** | Starlette ASGI | Tornado | FastAPI / Uvicorn |
+| **Headless API Mode** | Built-in via `/api/` routes & Python client | Not supported natively | Fully native |
+
+> [!TIP]
+> **Production Migration Path:** Gradio applications can serve as headless API backends. If an organization outgrows the default UI, engineers can keep the Python business logic running inside Gradio's Starlette server and build a custom frontend (e.g., in Next.js) that communicates directly with Gradio's auto-generated endpoints.
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: What frontend framework does Gradio compile its user interface into?</b></summary>
+<br>
+<b>Answer:</b> Gradio translates Python UI component declarations into a responsive client-side Single Page Application compiled with Svelte, which renders as minified, reactive JavaScript in the browser.
+</details>
+
+<details>
+<summary><b>Question 2: What web server framework runs under the hood when you call `launch()` in Gradio?</b></summary>
+<br>
+<b>Answer:</b> Gradio uses Starlette, a lightweight, asynchronous ASGI framework (the same foundation used by FastAPI), enabling high-performance request routing and WebSocket handling.
+</details>
+
+<details>
+<summary><b>Question 3: How does Gradio handle port conflicts if port 7860 is already in use?</b></summary>
+<br>
+<b>Answer:</b> Gradio detects the occupied port and performs sequential port hunting, automatically incrementing to the next free port (e.g., 7861, 7862) without failing.
+</details>
+
+<details>
+<summary><b>Question 4: How does Gradio connect a UI button click to a Python function?</b></summary>
+<br>
+<b>Answer:</b> Gradio registers a dedicated Starlette API route for each callback. When an event fires on the client, the Svelte frontend sends an HTTP POST request to that route, which executes the bound Python function and returns the results to reactive UI components.
+</details>
+
+---
+
+# Multimodal App Architecture: Integrating DALL-E 3, Text-to-Speech, and Gradio Blocks
+
+Real-world AI assistants increasingly deliver rich, multimodal experiences by combining text generation, automated image synthesis, and spoken audio. Constructing these applications requires orchestrating distinct foundation models alongside specialized user interface layouts.
+
+Gradio's lower-level layout engine, `gr.Blocks`, provides the structural control needed to route multi-output data streams across image displays, audio players, and conversational transcripts.
+
+```text
+                            +--------------------------+
+                            |   User Input (Textbox)   |
+                            +--------------------------+
+                                          |
+                                          | message.submit()
+                                          v
+                            +--------------------------+
+                            | put_message_in_chatbot   | ---> [Instant UI Echo]
+                            +--------------------------+
+                                          |
+                                          | .then()
+                                          v
+                            +--------------------------+
+                            |    chat() Callback       |
+                            +--------------------------+
+                               /          |           \
+      Tool & LLM Completion   /           | TTS        \  DALL-E 3
+                             v            v             v
+                     [Text Response]  [Onyx Voice]  [Pop-Art Image]
+                             |            |             |
+                             +------------+-------------+
+                                          |
+                                          v
+                      +---------------------------------------+
+                      |         Gradio Blocks Layout          |
+                      |  [Chatbot UI] [Image Box] [Audio Bar] |
+                      +---------------------------------------+
+```
+
+---
+
+## The Three Gradio Interface Tiers
+
+Gradio provides three levels of abstraction, balancing developer convenience against architectural flexibility.
+
+### Standard Functional Demos (`gr.Interface`)
+Designed for basic function testing. Takes an input list, an output list, and a single function pointer. Best for quick regression testing or single-step algorithmic demos.
+
+### Pre-Packaged Chatbots (`gr.ChatInterface`)
+A canned conversational layout resembling standard messaging clients. Manages message history automatically, but restricts custom layouts and limits callbacks to returning simple string responses.
+
+### Custom Multi-Component Layouts (`gr.Blocks`)
+A low-level layout engine based on Python context managers. Enables complex multi-row grid structures (`gr.Row`, `gr.Column`), multi-component inputs/outputs, custom event chaining, and simultaneous multi-model orchestration.
+
+```mermaid
+flowchart LR
+    A["gr.Interface"] -->|Abstraction Level| B["gr.ChatInterface"]
+    B -->|Abstraction Level| C["gr.Blocks"]
+    
+    A --- D["Single function in/out<br/>Minimal customization"]
+    B --- E["Canned chatbot window<br/>Automated text history"]
+    C --- F["Granular layout control<br/>Multi-event chaining<br/>Multimodal outputs"]
+```
+
+---
+
+## Integrating Image Generation via DALL-E 3
+
+The OpenAI Images API generates high-resolution raster images from natural language prompts. In travel applications, models can dynamically illustrate destinations referenced during the chat session.
+
+```python
+import base64
+from io import BytesIO
+from PIL import Image
+import openai
+
+def artist(city: str) -> Image.Image:
+    """
+    Generates a pop-art travel illustration for a specified destination using DALL-E 3.
+    Decodes the base64 JSON response into an in-memory PIL Image.
+    """
+    prompt = (
+        f"An image representing a vacation in {city}, showing tourist spots and "
+        f"everything unique about {city}, in a vibrant pop-art style."
+    )
+    
+    # Invoke OpenAI image generation endpoint
+    response = openai.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        size="1024x1024",
+        n=1,
+        response_format="b64_json"
+    )
+    
+    # Extract and decode base64 payload into PIL Image
+    raw_b64 = response.data[0].b64_json
+    image_bytes = base64.b64decode(raw_b64)
+    return Image.open(BytesIO(image_bytes))
+```
+
+> [!WARNING]
+> **API Economics Warning:** While text completions typically cost fractions of a cent, DALL-E 3 image generation costs approximately **$0.04 per call**. Multimodal workflows should invoke image generation conditionally (e.g., only when a relevant entity or city is identified) rather than on every conversation turn.
+
+---
+
+## Integrating Text-to-Speech (TTS) Synthesis
+
+The OpenAI Audio API converts assistant text responses into expressive spoken audio.
+
+```python
+def talker(message_text: str) -> bytes:
+    """
+    Synthesizes natural spoken speech from text using OpenAI's TTS endpoint.
+    Returns raw MP3 audio bytes.
+    """
+    response = openai.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="onyx",  # Options include: onyx, alloy, echo, fable, shimmer, coral
+        input=message_text
+    )
+    return response.content
+```
+
+---
+
+## Coordinated Multimodal Chat Callback
+
+To connect tools, image generation, and audio synthesis, the chat callback must extract tool metadata (such as destination cities) and return three distinct outputs: the updated text history, audio bytes, and the PIL image.
+
+```python
+def handle_tool_calls_and_return_cities(assistant_message):
+    """
+    Executes database tool calls while extracting queried cities for downstream media generation.
+    """
+    responses = []
+    cities = []
+    for tool_call in assistant_message.tool_calls:
+        if tool_call.function.name == "get_ticket_price":
+            arguments = json.loads(tool_call.function.arguments)
+            city = arguments.get("destination_city")
+            cities.append(city)
+            price_details = get_ticket_price(city)
+            
+            responses.append({
+                "role": "tool",
+                "content": price_details,
+                "tool_call_id": tool_call.id
+            })
+    return responses, cities
+
+def multimodal_chat(history):
+    """
+    Primary orchestrator: executes LLM reasoning, database tools,
+    audio synthesis, and conditional image generation.
+    """
+    cleaned_history = [{"role": h["role"], "content": h["content"]} for h in history]
+    messages = [{"role": "system", "content": system_message}] + cleaned_history
+    
+    response = openai.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        tools=tools
+    )
+    
+    discovered_cities = []
+    while response.choices[0].finish_reason == "tool_calls":
+        assistant_msg = response.choices[0].message
+        tool_resps, cities = handle_tool_calls_and_return_cities(assistant_msg)
+        discovered_cities.extend(cities)
+        
+        messages.append(assistant_msg)
+        messages.extend(tool_resps)
+        
+        response = openai.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=tools
+        )
+        
+    reply_text = response.choices[0].message.content
+    history.append({"role": "assistant", "content": reply_text})
+    
+    # Synthesize voice audio for every assistant response
+    audio_data = talker(reply_text)
+    
+    # Generate image only if a specific destination city was queried
+    image_data = None
+    if discovered_cities:
+        image_data = artist(discovered_cities[0])
+        
+    return history, audio_data, image_data
+```
+
+---
+
+## Constructing the UI with `gr.Blocks` and Event Chaining
+
+When invoking long-running operations (such as DALL-E 3 generation, which can take 15–20 seconds), standard UIs appear frozen. Gradio event chaining resolves this through optimistic UI updates:
+
+1. `message.submit(...)`: Immediately clears the input text box and appends the user's message to the chatbot display.
+2. `.then(...)`: Invokes the primary multimodal orchestrator to run database lookups, image generation, and audio synthesis in the background.
+
+```python
+import gradio as gr
+
+def put_message_in_chatbot(message_text, history):
+    """
+    Optimistically renders the user's message in the UI before background processing begins.
+    """
+    return "", history + [{"role": "user", "content": message_text}]
+
+# Construct layout using Blocks context manager
+with gr.Blocks(title="Flighty AI Assistant") as ui:
+    with gr.Row():
+        chatbot = gr.Chatbot(height=500, type="messages")
+        image_output = gr.Image(height=500, interactive=False, label="Destination Art")
+    with gr.Row():
+        audio_output = gr.Audio(autoplay=True, label="Spoken Response")
+    with gr.Row():
+        message_input = gr.Textbox(label="Chat with our AI Assistant:", placeholder="Ask about flights...")
+
+    # Chain events for optimistic rendering followed by full processing
+    message_input.submit(
+        fn=put_message_in_chatbot,
+        inputs=[message_input, chatbot],
+        outputs=[message_input, chatbot]
+    ).then(
+        fn=multimodal_chat,
+        inputs=[chatbot],
+        outputs=[chatbot, audio_output, image_output]
+    )
+```
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: What core advantage does `gr.Blocks` provide over `gr.ChatInterface`?</b></summary>
+<br>
+<b>Answer:</b> While `gr.ChatInterface` enforces a fixed, canned chatbot layout returning only text strings, `gr.Blocks` offers granular control over multi-row grid layouts, supports custom multi-modal inputs and outputs (e.g., returning text, audio, and images simultaneously), and allows multi-step event chaining.
+</details>
+
+<details>
+<summary><b>Question 2: How does event chaining (`.submit().then()`) improve user experience during slow API operations?</b></summary>
+<br>
+<b>Answer:</b> Event chaining allows an immediate optimistic UI update (clearing the input box and displaying the user's message instantly via `put_message_in_chatbot`) before starting long-running background tasks (like DALL-E 3 image rendering, which takes 15–20 seconds).
+</details>
+
+<details>
+<summary><b>Question 3: What response format should be requested from `openai.images.generate` to process images directly in memory?</b></summary>
+<br>
+<b>Answer:</b> Requesting `response_format="b64_json"` returns raw base64-encoded strings that can be decoded in-memory via `base64.b64decode` and loaded directly into a PIL `Image`, avoiding intermediate disk writes or temporary hosting dependencies.
+</details>
+
+<details>
+<summary><b>Question 4: What is the estimated cost difference between a text completion call and a DALL-E 3 image generation call?</b></summary>
+<br>
+<b>Answer:</b> While typical text completions cost fractions of a cent (e.g., $0.0001 to $0.001), each DALL-E 3 image generation costs approximately $0.04—making image generation orders of magnitude more expensive.
+</details>
+
+---
+
+# Deploying and Running the Complete Multimodal AI Airline Assistant
+
+Deploying an end-to-end multimodal assistant requires verifying system security, monitoring multi-model request lifecycles, and ensuring operational reliability across diverse user queries.
+
+This module covers launching the application with authentication, tracing request workflows across simultaneous API calls, and evaluating architecture extensions for production deployment.
+
+```text
+USER QUERY: "Is it cheaper to go to Paris or Tokyo?"
+                                |
+                                v
++-------------------------------------------------------------------------------+
+|                       API CALL TRACE (4 TOTAL CALLS)                          |
+|                                                                               |
+|  Call 1: LLM Orchestrator (Chat Completion)                                   |
+|          -> Emits 2 Tool Calls: get_ticket_price("paris"), get_ticket_price("tokyo")
+|                                                                               |
+|  Local Execution:                                                             |
+|          -> SQLite queries prices.db: Paris=$899.0, Tokyo=$1420.0             |
+|                                                                               |
+|  Call 2: LLM Synthesis (Chat Completion)                                      |
+|          -> Analyzes results, synthesizes comparison response text            |
+|                                                                               |
+|  Call 3: Audio TTS Endpoint                                                   |
+|          -> Converts synthesized text response to speech audio                |
+|                                                                               |
+|  Call 4: DALL-E 3 Endpoint                                                    |
+|          -> Generates destination illustration for selected city (Paris)     |
++-------------------------------------------------------------------------------+
+```
+
+---
+
+## Authentication and Application Launch
+
+To prevent unauthorized access to costly endpoints (such as DALL-E 3), Gradio provides built-in credential gating via the `auth` parameter in `launch()`.
+
+```python
+# Launch application with basic username/password authentication
+ui.launch(
+    inbrowser=True,                      # Automatically open the interface in a default browser window
+    auth=("admin", "pass123")  # Simple credential gating tuple (username, password)
+)
+```
+
+### Expected Output Sample
+
+```text
+* Running on local URL:  http://127.0.0.1:7860
+* Opening in existing browser session...
+```
+
+When accessed in the browser, Gradio presents a clean authentication modal before revealing the application layout.
+
+---
+
+## Tracing Multi-Turn Request Lifecycles
+
+Understanding the exact sequence of model calls reveals how modern composite AI applications operate under the hood.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant App as Gradio Blocks App
+    participant OpenAI as OpenAI Chat API
+    participant DB as SQLite prices.db
+    participant TTS as OpenAI Audio API
+    participant DALLE as DALL-E 3 API
+
+    User->>App: Submits "Is it cheaper to go to Paris or Tokyo?"
+    App->>OpenAI: Request 1 (Chat Completion with tools)
+    OpenAI-->>App: finish_reason="tool_calls" [get_price(Paris), get_price(Tokyo)]
+    App->>DB: Query price for Paris
+    DB-->>App: $899.0
+    App->>DB: Query price for Tokyo
+    DB-->>App: $1420.0
+    App->>OpenAI: Request 2 (Updated messages with tool observations)
+    OpenAI-->>App: finish_reason="stop", text comparison response
+    par Multimodal Generation
+        App->>TTS: Request 3 (Synthesize spoken speech)
+        TTS-->>App: Audio MP3 bytes
+    and
+        App->>DALLE: Request 4 (Generate pop-art illustration for Paris)
+        DALLE-->>App: Base64 JSON image payload
+    end
+    App-->>User: Renders Chat Transcript, Audio Player, & Pop-Art Canvas
+```
+
+### Execution Trace: Comparative Query
+
+When a user submits: *"Is it cheaper to go to Paris or Tokyo?"*, the runtime executes four coordinated API calls:
+1. **Tool Invocation Call:** The model determines that two pieces of data are required and emits two tool calls in a single turn (`get_ticket_price("paris")` and `get_ticket_price("tokyo")`).
+2. **Database Execution:** The Python runtime intercepts the requests, queries `prices.db`, and formats observations for both destinations.
+3. **Synthesis Completion Call:** The model reviews both price points, performs the numerical comparison, and drafts the natural language reply.
+4. **Multimodal Generation:** The application routes the reply text to the TTS endpoint while dispatching the destination city to DALL-E 3.
+
+### Expected Console Output Sample
+
+```text
+DATABASE TOOL CALLED: Getting ticket price for Paris
+DATABASE TOOL CALLED: Getting ticket price for Tokyo
+[Media Pipeline] Synthesizing speech via Onyx voice...
+[Media Pipeline] Synthesizing 1024x1024 pop-art image for Paris...
+* Generation completed in 17.8 seconds.
+```
+
+---
+
+## Architectural Comparison: Operational Patterns
+
+| Engineering Dimension | Prototyping Phase (Current Assistant) | Production Enterprise Architecture |
+| :--- | :--- | :--- |
+| **Authentication** | Basic HTTP Auth (`auth=("user", "pass")`) | OAuth2 / OIDC / JWT session tokens |
+| **State Storage** | Volatile in-memory Gradio session list | Persistent Redis session cache + PostgreSQL DB |
+| **Tool Execution** | Local embedded SQLite queries | Dedicated microservices / REST API gateway (e.g., Amadeus API) |
+| **Media Generation** | Synchronous sequential blocking calls | Async Celery/Redis task workers with webhook callbacks |
+| **Error Handling** | Basic console try/except print blocks | Circuit breakers, exponential backoff retries, dead-letter queues |
+
+> [!CAUTION]
+> **Transactional Safety in Real-World Systems:** Expanding tools from read-only lookups (e.g., `get_ticket_price`) to state-mutating actions (e.g., `book_flight_ticket`) requires strict confirmation steps. Never allow an autonomous model loop to execute financial transactions or irreversibly modify production databases without explicit user confirmation.
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: How can basic authentication be enabled on a Gradio interface without adding external proxy servers?</b></summary>
+<br>
+<b>Answer:</b> Pass the `auth` parameter directly to `ui.launch(auth=("username", "password"))`, or supply a list of valid user-password tuples to enable built-in credential gating.
+</details>
+
+<details>
+<summary><b>Question 2: How many distinct API calls are executed when a user asks the assistant to compare ticket prices between two cities?</b></summary>
+<br>
+<b>Answer:</b> Approximately four API calls: (1) the initial Chat Completion call where the model requests tool calls, (2) the second Chat Completion call where the model receives tool outputs and drafts the answer, (3) the Audio TTS call, and (4) the DALL-E 3 image generation call.
+</details>
+
+<details>
+<summary><b>Question 3: Can modern LLM models request multiple tool calls in a single turn?</b></summary>
+<br>
+<b>Answer:</b> Yes. Through parallel tool calling, the model can emit multiple function calls within a single completion response (e.g., requesting prices for both Paris and Tokyo simultaneously), reducing round-trip latency.
+</details>
+
+<details>
+<summary><b>Question 4: What architectural safeguard is necessary when transitioning from informational tools to transactional tools?</b></summary>
+<br>
+<b>Answer:</b> Transactional tools (such as booking flights or modifying account balances) require "human-in-the-loop" confirmation patterns or two-phase commit flows to prevent autonomous models from inadvertently triggering permanent or financial side-effects.
+</details>
+
+---
+
+# Benchmarking Frontier and Open-Source Models via OpenRouter: Vector SVG Generation
+
+Evaluating foundational models across common benchmarks often obscures how well they reason about physical composition, spatial relationships, and strict formatting constraints.
+
+While modern image generation models (such as DALL-E 3) synthesize pixel bitmaps via diffusion techniques, asking an LLM to generate **Scalable Vector Graphics (SVG)** tests a fundamentally different cognitive capacity: procedural reasoning, spatial layout planning, and valid syntax construction.
+
+```text
+RASTER DIFFUSION (e.g., DALL-E 3):
+[Text Prompt] ---> [Latent Noise Diffusion Process] ---> [2D Pixel Array (Bitmap)]
+(Probabilistic pixel synthesis; cannot directly emit editable vector code)
+
+VECTOR SVG REASONING (LLM Code Generation):
+[Text Prompt] ---> [Procedural Spatial Planning]    ---> [Structured XML Markup]
+                   - Defines coordinate systems          <svg viewBox="0 0 500 500">
+                   - Draws lines, circles, paths         <rect x="50" y="50" .../>
+                   - Applies styling & transforms        <path d="M 100 200 ..." />
+```
+
+---
+
+## Why SVG Generation Serves as a Model Benchmark
+
+Inspired by AI researcher Simon Willison’s benchmark (evaluating whether models can draw a pelican riding a bicycle), generating vector drawings in raw SVG XML tests core capabilities:
+1. **Spatial Coordination:** The model must maintain an internal 2D coordinate system without visual feedback, ensuring limbs, wheels, and hats connect correctly.
+2. **Strict Code Constraints:** The output must be 100% valid XML. Any hallucinated syntax or improperly closed tags breaks rendering.
+3. **Stylistic Expression:** Translating abstract concepts (e.g., "rollerblading to work") into visual metaphors (action lines, business ties, office signage) evaluates creative reasoning.
+
+---
+
+## Unified Model Access via OpenRouter
+
+Evaluating dozens of proprietary and open-source models usually requires managing multiple client SDKs, disparate billing accounts, and incompatible API formats. **OpenRouter** simplifies this by acting as a universal routing gateway.
+
+```mermaid
+flowchart TD
+    A["Python Client (OpenAI SDK)"] -->|"Single API Key (sk-or-...)"| B["OpenRouter Gateway API"]
+    B -->|"Route Request"| C["OpenAI (GPT-5.2, GPT-5 Nano)"]
+    B -->|"Route Request"| D["Anthropic (Claude Opus 4.5)"]
+    B -->|"Route Request"| E["Google (Gemini 3 Pro)"]
+    B -->|"Route Request"| F["DeepSeek (DeepSeek V3.2)"]
+    B -->|"Route Request"| G["Moonshot AI (Kimi K2 Thinking)"]
+    B -->|"Route Request"| H["xAI (Grok 4.1 Fast)"]
+```
+
+### Router vs. Abstraction Layer
+
+It is critical to distinguish an API router from an abstraction layer:
+- **Router (OpenRouter):** Acts as a proxy. It passes raw request parameters (such as `reasoning_effort` or provider-specific flags) directly through to underlying model endpoints without modifying payloads.
+- **Abstraction Layer (e.g., LiteLLM, LangChain):** Normalizes inputs and outputs across providers into a uniform, homogenized schema, occasionally masking provider-specific capabilities.
+
+---
+
+## Benchmarking Implementation: Generating Vector Art
+
+The following script benchmarks frontier and open-source models on a unified prompt: *"Generate an SVG of a panda rollerblading to work. Respond with the SVG only, no code blocks."*
+
+```python
+import os
+import time
+from datetime import datetime
+from dotenv import load_dotenv
+import openai
+
+# Load environment credentials
+load_dotenv(override=True)
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Validate API key format
+if OPENROUTER_API_KEY and OPENROUTER_API_KEY.startswith("sk-or-"):
+    print("OPENROUTER_API_KEY validated successfully.")
+else:
+    print("Warning: OPENROUTER_API_KEY appears invalid or missing.")
+
+# Initialize the OpenAI standard client pointing to OpenRouter's gateway
+client = openai.OpenAI(
+    base_url=OPENROUTER_BASE_URL,
+    api_key=OPENROUTER_API_KEY
+)
+
+# Benchmark assignment parameters
+challenge = "a panda rollerblading to work"
+prompt = f"Generate an SVG of {challenge}. Respond with the SVG only, no code blocks."
+messages = [{"role": "user", "content": prompt}]
+
+def benchmark_artist(model_name: str, effort: str = None):
+    """
+    Invokes a specified model via OpenRouter, measures total generation time,
+    and returns formatted Markdown metadata alongside the raw SVG markup.
+    """
+    try:
+        start_time = datetime.now()
+        
+        # Build completion arguments dynamically
+        kwargs = {"model": model_name, "messages": messages}
+        if effort:
+            kwargs["reasoning_effort"] = effort
+            
+        response = client.chat.completions.create(**kwargs)
+        result_content = response.choices[0].message.content
+        
+        elapsed_seconds = (datetime.now() - start_time).total_seconds()
+        mins = int(elapsed_seconds // 60)
+        secs = int(elapsed_seconds % 60)
+        
+        header = f"### Model: {model_name}\n*Generation Time: {mins}m {secs}s*\n\n"
+        return header, result_content
+    except Exception as exc:
+        print(f"Execution failed for model {model_name}: {exc}")
+        return f"### Model: {model_name}\n*Error: {exc}*\n\n", None
+```
+
+### Candidate Model Registry
+
+The benchmark evaluates a diverse spectrum of frontier reasoning engines and open-weights models:
+
+```python
+# List of candidate models spanning major industry providers
+candidate_models = [
+    ("openai/gpt-oss-120b", None),             # Open-weights enterprise foundation model
+    ("openai/gpt-5-nano", "low"),              # Lightweight compact reasoning model
+    ("deepseek/deepseek-v3.2", None),          # Leading open-source weights model
+    ("moonshotai/kimi-k2-thinking", None),      # Advanced reasoning model with internal thought chain
+    ("x-ai/grok-4.1-fast", None),              # High-throughput frontier model
+    ("anthropic/claude-opus-4.5", None),       # High-capacity reasoning engine
+    ("openai/gpt-5.2", "high"),                # Frontier reasoning model with deep thinking effort
+    ("google/gemini-3-pro-preview", None)      # High-performance multimodal frontier model
+]
+
+# Execute benchmarks sequentially
+results = []
+for model_id, effort_level in candidate_models:
+    print(f"Running benchmark for {model_id}...")
+    meta, svg_code = benchmark_artist(model_id, effort=effort_level)
+    results.append((meta, svg_code))
+```
+
+---
+
+## Comparative Model Performance and Findings
+
+| Model | Classification | Generation Quality & Visual Analysis | Execution Time |
+| :--- | :--- | :--- | :--- |
+| **GPT OSS 120B** | Open Weights | Well-formed SVG; clean skate geometry; coherent anatomy | Moderate (~45s) |
+| **GPT-5 Nano** | Compact Closed | Failed; threw syntax exception or emitted truncated XML | Error |
+| **DeepSeek V3.2** | Open Weights | Stylized composition; skates placed at staggered depths | Fast (~35s) |
+| **Kimi K2 Thinking** | Open Reasoning | Strong structural rendering; added distinctive headwear | Long (~90s) |
+| **Grok 4.1 Fast** | Closed Frontier | Bold, playful aesthetic; assertive typography ("WORK") | Fast (~25s) |
+| **Claude Opus 4.5** | Closed Frontier | Highly refined; detailed action lines and office background | Moderate (~55s) |
+| **GPT-5.2 (High Effort)** | Closed Frontier | Dynamic kinetic motion; swirly wind vectors; excellent limbs | Long (~120s) |
+| **Gemini 3 Pro** | Closed Frontier | Outstanding visual flair; flailing limbs; dynamic posture | Moderate (~50s) |
+
+> [!NOTE]
+> **Sequential vs. Asynchronous Execution:** Running models sequentially across multiple providers can take 10–15 minutes total. In production benchmarking setups, converting this loop to asynchronous execution (`asyncio` with `AsyncOpenAI`) executes requests concurrently, reducing benchmark duration to the latency of the single slowest provider.
+
+---
+
+## Interactive Knowledge Check Quiz
+
+<details>
+<summary><b>Question 1: Why does generating an SVG test LLM reasoning capabilities differently than generating a bitmap with DALL-E 3?</b></summary>
+<br>
+<b>Answer:</b> DALL-E 3 generates images via latent diffusion over pixel distributions without symbolic reasoning. Generating an SVG requires the language model to write structured XML code, manage a 2D coordinate space mathematically, and position shapes and paths procedurally without real-time visual feedback.
+</details>
+
+<details>
+<summary><b>Question 2: What is the architectural difference between an API router like OpenRouter and an abstraction library like LiteLLM?</b></summary>
+<br>
+<b>Answer:</b> An API router operates as a network proxy that forwards requests directly to different provider endpoints without modifying payloads, allowing direct access to provider-specific features. An abstraction layer normalizes inputs and outputs into a single unified Python schema, sometimes hiding provider-specific options.
+</details>
+
+<details>
+<summary><b>Question 3: What does the `reasoning_effort` parameter configure when calling models like GPT-5.2 or Kimi K2?</b></summary>
+<br>
+<b>Answer:</b> It controls the computational budget allocated to the model's internal reasoning/thinking phase prior to emitting visible output tokens, allowing developers to trade latency for deeper procedural planning.
+</details>
+
+<details>
+<summary><b>Question 4: Why did compact reasoning models like GPT-5 Nano struggle with vector SVG generation?</b></summary>
+<br>
+<b>Answer:</b> Vector generation requires simultaneous mastery of long-context syntax validity, complex coordinate arithmetic, and spatial planning. Smaller compact models often fail to sustain multi-line XML tag integrity and spatial coherence under low reasoning budgets.
 </details>
